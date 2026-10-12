@@ -1,0 +1,16 @@
+# Simulation outputs (vtu frames, csv logs, animations)
+output/
+
+# Byte-code
+__pycache__/
+*.pyc
+
+# Local working notes and diagnostics (not part of the solver)
+scratch/
+current-situation.md
+CLAUDE.md
+
+# Editor / OS noise
+.vscode/
+.idea/
+Thumbs.db

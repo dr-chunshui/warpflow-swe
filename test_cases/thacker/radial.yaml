@@ -1,0 +1,52 @@
+# Thacker radial solution: radially oscillating water body in a
+# parabolic bowl.  TELEMAC examples/thacker (user_fortran_2): 4x4 m
+# domain, r0 = 0.8, omega = sqrt(8 g H0)/a = 2.8022 rad/s (period
+# 2.242 s).  Moving wet/dry front near r = 0.894 at t = 0.
+case:
+  name: thacker_radial
+  analytic: thacker_radial
+  t_end: 10.0
+
+mesh:
+  type: rect
+  xmin: 0.0
+  xmax: 4.0
+  ymin: 0.0
+  ymax: 4.0
+  dx: 0.04
+  diagonal: alternating
+
+physics:
+  g: 9.81
+
+initial:
+  type: thacker_radial
+  params: {h0: 0.1, a: 1.0, r0: 0.8, length: 4.0, xc: 2.0, yc: 2.0}
+
+bathymetry:
+  type: thacker
+  params: {h0: 0.1, a: 1.0, xc: 2.0, yc: 2.0}
+
+boundary:
+  groups:
+    - {name: walls_xmin, select: {xmin: [0.0, 4.0]}, type: wall}
+    - {name: walls_xmax, select: {xmax: [0.0, 4.0]}, type: wall}
+    - {name: walls_ymin, select: {ymin: [0.0, 4.0]}, type: wall}
+    - {name: walls_ymax, select: {ymax: [0.0, 4.0]}, type: wall}
+
+numerics:
+  cfl: 0.9
+  order: 1
+  limiter: barth
+  time_order: 1
+  eps_dry: 1.0e-6
+
+output:
+  dir: output/thacker_radial
+  vtk_interval: 0.5
+  csv_interval: 0.1
+  monitors:
+    - {name: center, x: 2.0, y: 2.0}
+    - {name: east,   x: 2.8, y: 2.0}
+  centerline_y: 2.0
+  band: 0.05
