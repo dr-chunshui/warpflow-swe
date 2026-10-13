@@ -75,11 +75,23 @@ class ShallowWaterSolver:
         ])
         bedge_group = np.full(ne, -1, dtype=np.int32)
         bparam = np.zeros(ne, dtype=np.float64)
+        self._time_groups = []  # (edge_idx, mean, amp, period, phase)
         for gi, grp in enumerate(groups):
             sel_edges = mesh.boundary_edges[group_of == gi]
             bedge_group[sel_edges] = gi
             if grp.type == "level":
-                bparam[sel_edges] = grp.value
+                if grp.time:
+                    # harmonic level: zs(t) = mean + amp*sin(2 pi t/T + ph)
+                    ts = grp.time
+                    mean = float(ts["mean"])
+                    amp = float(ts["amp"])
+                    period = float(ts["period"])
+                    phase = float(ts.get("phase", 0.0))
+                    self._time_groups.append(
+                        (sel_edges, mean, amp, period, phase))
+                    bparam[sel_edges] = mean + amp * np.sin(phase)
+                else:
+                    bparam[sel_edges] = grp.value
             elif grp.type == "inflow_q":
                 # Uniform unit-width discharge q = Q / total edge length:
                 # sum(q * L_e) = Q exactly.  Kernel convention: bparam is
@@ -95,6 +107,16 @@ class ShallowWaterSolver:
         self.bparam = wp.array(bparam, dtype=wp.float64)
         self.bflux = wp.zeros(self.n_groups, dtype=wp.float64)
         self._group_of = group_of
+        self._bparam_host = bparam
+
+        # ---- source terms ------------------------------------------------
+        if cfg.strickler > 0.0:
+            self.strickler = wp.array(
+                np.full(n, float(cfg.strickler), dtype=np.float64),
+                dtype=wp.float64)
+        else:
+            self.strickler = None
+        self.wind_on = cfg.wind_coeff != 0.0
 
         # ---- monitors ----------------------------------------------------
         self.monitor_cells = [
@@ -109,6 +131,16 @@ class ShallowWaterSolver:
     def _initial_state(self, mesh: TriMesh) -> np.ndarray:
         zb = build_bathymetry(self.cfg, mesh)
         return build_initial(self.cfg, mesh, zb)
+
+    # ------------------------------------------------------------------
+    def update_time_bcs(self, t: float) -> None:
+        """Refresh harmonic level boundary values at time t (no-op if none)."""
+        if not self._time_groups:
+            return
+        for edges, mean, amp, period, phase in self._time_groups:
+            self._bparam_host[edges] = mean + amp * np.sin(
+                2.0 * np.pi * t / period + phase)
+        self.bparam = wp.array(self._bparam_host, dtype=wp.float64)
 
     # ------------------------------------------------------------------
     def compute_dt(self, t_remaining: float) -> float:
@@ -149,6 +181,11 @@ class ShallowWaterSolver:
             self.rhs, self.bflux,
             wp.int32(self.cfg.order),
         ])
+        if self.wind_on:
+            wp.launch(K.k_wind, dim=self.n_cells, inputs=[
+                w_state, self.area, self.rhs,
+                wp.float64(self.cfg.wind_u), wp.float64(self.cfg.wind_v),
+                wp.float64(self.cfg.wind_coeff)])
 
     # ------------------------------------------------------------------
     def step(self, dt: float) -> None:
@@ -157,15 +194,24 @@ class ShallowWaterSolver:
             self._evaluate_rhs(self.w)
             wp.launch(K.k_update, dim=self.n_cells, inputs=[
                 self.w, self.rhs, self.area, wp.float64(dt), self.wb])
+            if self.strickler is not None:
+                wp.launch(K.k_friction, dim=self.n_cells, inputs=[
+                    self.wb, self.strickler, wp.float64(dt)])
             self.w, self.wb = self.wb, self.w
         else:
             # SSP-RK2: w1 = w + dt L(w); w_new = 0.5 (w + w1 + dt L(w1))
             self._evaluate_rhs(self.w)
             wp.launch(K.k_update, dim=self.n_cells, inputs=[
                 self.w, self.rhs, self.area, wp.float64(dt), self.w2])
+            if self.strickler is not None:
+                wp.launch(K.k_friction, dim=self.n_cells, inputs=[
+                    self.w2, self.strickler, wp.float64(dt)])
             self._evaluate_rhs(self.w2)
             wp.launch(K.k_update, dim=self.n_cells, inputs=[
                 self.w2, self.rhs, self.area, wp.float64(dt), self.wb])
+            if self.strickler is not None:
+                wp.launch(K.k_friction, dim=self.n_cells, inputs=[
+                    self.wb, self.strickler, wp.float64(dt)])
             wp.launch(K.k_comb, dim=self.n_cells, inputs=[
                 self.w, self.wb, self.w2])
             self.w, self.w2 = self.w2, self.w
@@ -181,7 +227,8 @@ class ShallowWaterSolver:
 
     def snapshot(self) -> dict:
         """Host copies of the state for I/O (h, u, v, zb, zs per cell)."""
-        w_np = self.w.numpy()
+        avg = getattr(self, "_avg_w", None)
+        w_np = self.w.numpy() if avg is None else avg
         zb_np = self.zb.numpy()
         h = np.maximum(w_np[:, 0], 0.0)
         wet = h > self.cfg.eps_dry
@@ -229,7 +276,15 @@ class ShallowWaterSolver:
         if csv_on:
             log_row()
 
+        # time-averaging window (wind set-up: the steady balance is extracted
+        # as a time mean over the last `average_window` seconds, which
+        # filters the residual basin-scale seiche)
+        avg_on = cfg.output.average_window > 0.0
+        acc = np.zeros((self.n_cells, 3), dtype=np.float64)
+        acc_n = 0
+
         while self.t < cfg.t_end - 1.0e-12:
+            self.update_time_bcs(self.t)
             next_event = cfg.t_end
             if vtk_on:
                 next_event = min(next_event, next_vtk + cfg.output.vtk_interval)
@@ -239,12 +294,21 @@ class ShallowWaterSolver:
             self._last_dt = dt
             self.step(dt)
 
+            if avg_on and self.t >= cfg.t_end - cfg.output.average_window:
+                acc += self.w.numpy()
+                acc_n += 1
+
             if vtk_on and self.t >= next_vtk + cfg.output.vtk_interval - 1.0e-9:
                 next_vtk += cfg.output.vtk_interval
                 dump_frame()
             if csv_on and self.t >= next_csv + cfg.output.csv_interval - 1.0e-9:
                 next_csv += cfg.output.csv_interval
                 log_row()
+
+        if avg_on and acc_n > 0:
+            self._avg_w = acc / acc_n
+            print(f"averaged state over [{cfg.t_end - cfg.output.average_window:g}, "
+                  f"{cfg.t_end:g}] s ({acc_n} steps)")
 
         if vtk_on:
             dump_frame()

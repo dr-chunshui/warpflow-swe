@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .config import CaseConfig
+from .config import BoundaryGroup, CaseConfig
 
 G = 9.81
 
@@ -348,6 +348,156 @@ def seiche(cfg, t, x, y):
     h = h0 + amp * np.cos(k * xp) * np.cos(om * t)
     u = (c / h0) * amp * np.sin(k * xp) * np.sin(om * t)
     return h, u, np.zeros_like(x)
+
+
+# ----------------------------------------------------------------------
+# Progressive wave in a channel (TELEMAC validation manual ch. 56, wave)
+# ----------------------------------------------------------------------
+def _wave_bc(cfg: CaseConfig) -> BoundaryGroup:
+    """The harmonic level boundary driving the wave (yaml single source)."""
+    for g in cfg.boundary:
+        if g.type == "level" and g.time:
+            return g
+    raise ValueError("wave_prog requires a level boundary group with a "
+                     "'time: {mean, amp, period}' spec")
+
+
+@_register("wave_prog")
+def wave_prog(cfg, t, x, y):
+    """Linear progressive wave, H0 >> A (manual eq. 56.1-56.2):
+
+        H = H0 + A sin(2 pi (t/T - x/(T c))),  c = sqrt(g H0)
+        U = A sqrt(g/H0) sin(2 pi (t/T - x/(T c)))
+    """
+    g_bc = _wave_bc(cfg)
+    h0 = float(g_bc.time["mean"])
+    amp = float(g_bc.time["amp"])
+    period = float(g_bc.time["period"])
+    c = np.sqrt(G * h0)
+    ph = 2.0 * np.pi * (t / period - x / (period * c))
+    h = h0 + amp * np.sin(ph)
+    u = amp * np.sqrt(G / h0) * np.sin(ph)
+    return h, u, np.zeros_like(x)
+
+
+# ----------------------------------------------------------------------
+# Gradually varied flow with Strickler friction
+# (TELEMAC validation manual ch. 27, friction; steady state, direct
+# integration of the GVF equation like examples/friction exacte.f)
+# ----------------------------------------------------------------------
+@_register("friction_gvf")
+def friction_gvf(cfg, t, x, y):
+    """Steady channel flow on a mild slope with Strickler friction.
+
+    Reference = the exact steady state of the 1D SWE with friction,
+        dh/dx = (S0 - Sf) / (1 - Fr^2),
+    marched upstream from the downstream (level) control with RK4.
+    All parameters come from the yaml: discharge from the inflow_q group,
+    outlet level from the xmax level group, slope from the bathymetry,
+    Strickler K from physics.
+    """
+    S0 = -float(cfg.bathymetry.params["slope"])
+    width = cfg.mesh.ymax - cfg.mesh.ymin
+    L = cfg.mesh.xmax - cfg.mesh.xmin
+    q_in = 0.0
+    zs_out = None
+    for g in cfg.boundary:
+        if g.type == "inflow_q":
+            q_in += abs(float(g.value))
+        elif g.type == "level" and g.select.get("xmax") is not None:
+            zs_out = float(g.value)
+    if q_in <= 0.0 or zs_out is None:
+        raise ValueError("friction_gvf needs an inflow_q and an xmax "
+                         "level boundary group")
+    q = q_in / width
+    zb_out = float(cfg.bathymetry.params["z0"]) \
+        + float(cfg.bathymetry.params["slope"]) * cfg.mesh.xmax
+    h_out = zs_out - zb_out
+    xs, hs = _gvf_profile(q, cfg.strickler, S0, L, h_out)
+    h = np.interp(x, xs, hs)
+    u = q / h
+    return h, u, np.zeros_like(x)
+
+
+def _gvf_profile(q: float, k_str: float, s0: float, length: float,
+                 h_out: float, n: int = 200001):
+    """RK4 march of the GVF ODE from the outlet control (x = L) upstream.
+
+    Cached: the reference only depends on (q, K, S0, L, h_out).
+    """
+    key = (q, k_str, s0, length, h_out)
+    if key in _gvf_profile.cache:
+        return _gvf_profile.cache[key]
+    if k_str <= 0.0:
+        raise ValueError("friction_gvf requires physics.strickler > 0")
+    nm = 1.0 / k_str  # Manning n
+    qn2 = (q * nm) ** 2
+
+    def dhdx(h: float) -> float:
+        fr2 = q * q / (G * h ** 3)
+        sf = qn2 / h ** (10.0 / 3.0)
+        return (s0 - sf) / (1.0 - fr2)
+
+    xs = np.linspace(length, 0.0, n)  # marching upstream
+    hs = np.empty(n)
+    hs[0] = h_out
+    dx = -length / (n - 1)
+    for i in range(n - 1):
+        h = hs[i]
+        k1 = dhdx(h)
+        k2 = dhdx(h + 0.5 * dx * k1)
+        k3 = dhdx(h + 0.5 * dx * k2)
+        k4 = dhdx(h + dx * k3)
+        hs[i + 1] = h + dx * (k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0
+    if np.any(hs <= 0.0) or np.any(~np.isfinite(hs)):
+        raise ValueError("friction_gvf: GVF march left the physical range")
+    xs_asc = np.ascontiguousarray(xs[::-1])
+    hs_asc = np.ascontiguousarray(hs[::-1])
+    _gvf_profile.cache[key] = (xs_asc, hs_asc)
+    return xs_asc, hs_asc
+
+
+_gvf_profile.cache: dict = {}
+
+
+# ----------------------------------------------------------------------
+# Wind set-up in a closed basin (TELEMAC validation manual ch. 59, wind)
+# ----------------------------------------------------------------------
+@_register("wind_setup")
+def wind_setup(cfg, t, x, y):
+    """Steady wind setup: surface slope balances the wind stress,
+
+        H(x) = sqrt(H0^2 + 2 c_w |W|^2 x / g),
+    with H0 fixed by mass conservation (examples/wind exacte.f).
+    The depth-mean velocity vanishes at equilibrium (zero net discharge
+    through every section: surface current + return flow cancel).
+    """
+    h_init = float(cfg.initial.params["zs"])
+    L = cfg.mesh.xmax - cfg.mesh.xmin
+    coeff = cfg.wind_coeff
+    wu, wv = cfg.wind_u, cfg.wind_v
+    wn2 = wu * wu + wv * wv
+    if coeff <= 0.0 or wn2 <= 0.0:
+        raise ValueError("wind_setup requires physics.wind u/v/coeff")
+    a = 2.0 * coeff * wn2 / G
+    target = h_init * L
+
+    def volume(h0: float) -> float:
+        # int_0^L sqrt(h0^2 + a x) dx
+        return (2.0 / (3.0 * a)) * ((h0 * h0 + a * L) ** 1.5 - h0 ** 3)
+
+    lo, hi = 1.0e-6, h_init
+    if volume(hi) < target:
+        raise ValueError("wind_setup: mass conservation unsolvable")
+    for _ in range(200):
+        mid = 0.5 * (lo + hi)
+        if volume(mid) < target:
+            lo = mid
+        else:
+            hi = mid
+    h0 = 0.5 * (lo + hi)
+    h = np.sqrt(h0 * h0 + a * x)
+    return h, np.zeros_like(x), np.zeros_like(x)
 
 
 def evaluate(name: str, cfg: CaseConfig, t: float,

@@ -21,6 +21,18 @@ Schema example (dambreak/ritter.yaml):
       monitors: [{x: 13.5, y: 0.225}]
       centerline_y: 0.225
       band: 0.02
+
+Extensions (TELEMAC validation cases wave / friction / wind):
+
+    physics:  {strickler: 70.0,               # bottom friction K [m^(1/3)/s]
+               wind: {u: 5.0, v: 0.0, coeff: 1.2615e-3}}
+    bathymetry: {type: slope, params: {z0: -4.0, slope: -1.85e-5}}
+    boundary:
+      groups:
+        - {name: inlet, select: {xmin: [0.0, 0.3]}, type: level,
+           time: {mean: 10.0, amp: 0.05, period: 0.5, phase: 0.0}}
+    output:
+      average_window: 1000.0   # time-average the state over the last N s
 """
 from __future__ import annotations
 
@@ -56,7 +68,7 @@ class InitialConfig:
 
 @dataclass
 class BathymetryConfig:
-    type: str = "flat"  # flat | formula
+    type: str = "flat"  # flat | bump | thacker | slope
     params: dict = field(default_factory=dict)
 
 
@@ -66,6 +78,10 @@ class BoundaryGroup:
     select: dict  # {"xmin": [y0, y1]} or {"ymin": [x0, x1]}, single key
     type: str  # wall | outflow | inflow_q | level
     value: float = 0.0  # zs for level [m], Q total for inflow_q [m^3/s]
+    time: dict = field(default_factory=dict)
+    # time-dependent level value: zs(t) = mean + amp*sin(2*pi*t/period+phase)
+    # keys: mean, amp, period; optional phase [rad] (default 0).  When
+    # ``time`` is non-empty it overrides ``value`` for ``level`` groups.
 
 
 @dataclass
@@ -76,6 +92,7 @@ class OutputConfig:
     monitors: list = field(default_factory=list)  # [{x, y}]
     centerline_y: float = 0.0
     band: float = 0.05  # |y - centerline_y| half width for profile extraction
+    average_window: float = 0.0  # time-average state over last N s (<=0 off)
 
 
 @dataclass
@@ -94,6 +111,10 @@ class CaseConfig:
     eps_dry: float
     output: OutputConfig
     g: float = 9.81
+    strickler: float = 0.0  # bottom friction K [m^(1/3)/s], 0 = off
+    wind_u: float = 0.0  # wind velocity [m/s]
+    wind_v: float = 0.0
+    wind_coeff: float = 0.0  # a_wind * rho_air / rho_water, 0 = off
 
 
 def _require(cond: bool, msg: str) -> None:
@@ -132,6 +153,8 @@ def load_config(path: str | Path) -> CaseConfig:
     bath = raw.get("bathymetry") or {"type": "flat", "params": {}}
     bathcfg = BathymetryConfig(type=bath.get("type", "flat"),
                                params=dict(bath.get("params") or {}))
+    _require(bathcfg.type in ("flat", "bump", "thacker", "slope"),
+             f"{path}: unknown bathymetry type {bathcfg.type!r}")
 
     groups_raw = (raw.get("boundary") or {}).get("groups") or []
     _require(groups_raw, f"{path}: boundary.groups must not be empty")
@@ -147,12 +170,20 @@ def load_config(path: str | Path) -> CaseConfig:
                  f"{path}: select side {side!r} invalid")
         _require(isinstance(span, list) and len(span) == 2,
                  f"{path}: select span must be [a, b]: {g.get('name')}")
-        if g["type"] in BC_WITH_VALUE:
+        tspec = dict(g.get("time") or {})
+        if tspec:
+            _require(g["type"] == "level",
+                     f"{path}: time-dependent value only for level: {g['name']}")
+            _require("mean" in tspec and "amp" in tspec and "period" in tspec,
+                     f"{path}: bc time needs mean/amp/period: {g['name']}")
+            _require(float(tspec["period"]) > 0.0,
+                     f"{path}: bc time period must be positive: {g['name']}")
+        elif g["type"] in BC_WITH_VALUE:
             _require("value" in g,
                      f"{path}: bc {g['type']} needs value: {g.get('name')}")
         groups.append(BoundaryGroup(
             name=g["name"], select=dict(g["select"]), type=g["type"],
-            value=float(g.get("value", 0.0)),
+            value=float(g.get("value", 0.0)), time=tspec,
         ))
 
     num = raw.get("numerics") or {}
@@ -171,6 +202,7 @@ def load_config(path: str | Path) -> CaseConfig:
         monitors=list(out.get("monitors") or []),
         centerline_y=float(out.get("centerline_y", 0.0)),
         band=float(out.get("band", 0.05)),
+        average_window=float(out.get("average_window", 0.0)),
     )
 
     phys = raw.get("physics") or {}
@@ -178,6 +210,9 @@ def load_config(path: str | Path) -> CaseConfig:
     if abs(g - 9.81) > 1.0e-12:
         # kernels capture gravity as the compile-time constant G
         raise ValueError(f"{path}: physics.g={g} unsupported; kernels use 9.81")
+    strickler = float(phys.get("strickler", 0.0))
+    _require(strickler >= 0.0, f"{path}: physics.strickler must be >= 0")
+    wind = dict(phys.get("wind") or {})
     return CaseConfig(
         name=str(case["name"]),
         analytic=str(case.get("analytic", "")),
@@ -193,4 +228,8 @@ def load_config(path: str | Path) -> CaseConfig:
         eps_dry=float(num.get("eps_dry", 1.0e-6)),
         output=output,
         g=g,
+        strickler=strickler,
+        wind_u=float(wind.get("u", 0.0)),
+        wind_v=float(wind.get("v", 0.0)),
+        wind_coeff=float(wind.get("coeff", 0.0)),
     )

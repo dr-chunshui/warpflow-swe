@@ -13,6 +13,8 @@ Numerics mirror TELEMAC-2D v8p4 finite volume sources:
 - CFL timestep:          caldt.f    (DTHAUT / max(0.01, c + |u|))
 - Boundary ghost states: cdl_fv.f   (wall strong imposition, Riemann
   invariant ghost for level/discharge; bord.f elevation->depth conversion)
+- Sources:               k_wind (wind stress, TELEMAC option for wind = 2),
+  k_friction (Strickler law, semi-implicit operator splitting)
 
 float64 discipline: every literal inside kernels is wp.float64(...);
 gravity is the module constant G from numeric.py.
@@ -634,6 +636,61 @@ def k_flux(
         rhs, b,
         wp.vec3d(le * f0, le * f1 - G * nx * hgz_j, le * f2 - G * ny * hgz_j),
     )
+
+
+# ---------------------------------------------------------------------------
+# Wind stress source (TELEMAC option for wind = 2): tau = c_w * rho_w *
+# |W| * W with c_w = a_wind * rho_air / rho_water.  The rhs carries the
+# CONSERVATIVE momentum rate d(hu)/dt * area, so the source enters as
+# area * c_w |W| W (stress per unit area, no h division); dividing by h
+# here would double-count and halve the equilibrium wind setup slope.
+# Dry cells are skipped.
+# ---------------------------------------------------------------------------
+@wp.kernel
+def k_wind(
+    w: wp.array(dtype=wp.vec3d),
+    cell_area: wp.array(dtype=wp.float64),
+    rhs: wp.array(dtype=wp.vec3d),
+    wind_u: wp.float64,
+    wind_v: wp.float64,
+    coeff: wp.float64,
+):
+    c = wp.tid()
+    h = w[c][0]
+    if h <= EPS_F64:
+        return
+    wn = wp.sqrt(wind_u * wind_u + wind_v * wind_v)
+    a = cell_area[c]
+    rhs[c] = rhs[c] + wp.vec3d(
+        wp.float64(0.0), a * coeff * wn * wind_u, a * coeff * wn * wind_v)
+
+
+# ---------------------------------------------------------------------------
+# Bottom friction, Strickler law K [m^(1/3)/s]: S_f = g |u| u / (K^2 h^(4/3)).
+# Semi-implicit operator splitting after each stage update: the scalar ODE
+# du/dt = -alpha u|u| is solved exactly by the backward-Euler map
+# u_new = u / (1 + dt alpha |u|) (Riccati), so the splitting is stable for
+# any dt and exact for steady uniform flow.  In-place, per cell: safe.
+# ---------------------------------------------------------------------------
+@wp.kernel
+def k_friction(
+    w: wp.array(dtype=wp.vec3d),
+    strickler: wp.array(dtype=wp.float64),
+    dt: wp.float64,
+):
+    c = wp.tid()
+    kf = strickler[c]
+    if kf <= EPS_F64:
+        return
+    h = w[c][0]
+    if h <= EPS_F64:
+        return
+    hu = w[c][1]
+    hv = w[c][2]
+    spd = wp.sqrt(hu * hu + hv * hv) / h
+    alpha = G * spd / (kf * kf * h * wp.cbrt(h))  # g|u| / (K^2 h^(4/3))
+    w[c] = wp.vec3d(h, hu / (wp.float64(1.0) + dt * alpha),
+                    hv / (wp.float64(1.0) + dt * alpha))
 
 
 # ---------------------------------------------------------------------------

@@ -31,6 +31,8 @@ def bathymetry_at(cfg: CaseConfig, x: np.ndarray, y: np.ndarray) -> np.ndarray:
         yc = float(p.get("yc", 0.5 * (y.min() + y.max())))
         r2 = (x - xc) ** 2 + (y - yc) ** 2
         return h0 * (r2 / (a * a) - 1.0)
+    if kind == "slope":  # plane bed, zb = z0 + slope*x (x absolute)
+        return float(p["z0"]) + float(p["slope"]) * x
     raise ValueError(f"unknown bathymetry type {kind!r}")
 
 
