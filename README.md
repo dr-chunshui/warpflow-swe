@@ -24,7 +24,11 @@ acceptance numbers and reproduction steps.
 - **Wet/dry fronts** — EPS_FV-style drying guard plus a velocity ceiling
   on near-dry states (see VALIDATION.md note 7 for why).
 - **Boundaries** — wall (mirror), outflow (zero-gradient), prescribed
-  discharge (cdl_fv.f algorithm) and prescribed free-surface elevation.
+  discharge (cdl_fv.f algorithm) and prescribed free-surface elevation
+  (steady or harmonic in time).
+- **Sources** — wind stress (TELEMAC option 2, conservative momentum
+  form) and Strickler bottom friction (semi-implicit Riccati splitting,
+  stable for any dt).
 - **Outputs** — `.vtu` frames + `.pvd` for ParaView, monitor-point and
   mass-history CSV, analytic-comparison profiles with L1/L2 norms.
 - **YAML-driven cases** — geometry, physics, numerics, boundaries and
@@ -43,7 +47,7 @@ python summarize.py                          # error table over output/
 python tests/test_riemann.py                 # unit tests: also
                                              #   test_float64, test_mesh,
                                              #   test_lake_at_rest, test_mass,
-                                             #   test_analytic
+                                             #   test_analytic, test_sources
 ```
 
 Each case writes to `output/<case>/`: `animation.pvd` (open in ParaView),
@@ -58,6 +62,9 @@ analytic solution is configured, `compare.png` + `errors.csv`.
 | Thacker planar / radial sloshing | 1 / 2 | front-dominated L1(h), 1.94x reduction on dx refinement |
 | Seiche standing wave | 1 / 2 | amplitude decay 3.2% / 2.1% over 7.4 periods (<= 5%) |
 | Bump subcritical / critical / transcritical | 1 / 2 | L1(h) 3.0e-3–5.2e-4; hydraulic jump 0.9–1.5 dx from analytic |
+| Friction GVF, slope + Strickler | 1 | L1(h) 3.3e-2 m = 0.3% of depth vs the steady GVF profile |
+| Harmonic progressive wave | 1 | L1(u) 6.9e-3, boundary-limited; interior-only 1.2e-3 (~1.5 orders) |
+| Wind setup, closed basin | 1 | time-mean L1(h) 9.7e-4 m = 0.12% of the set-up dz |
 
 Closed-domain mass is conserved to machine precision (~1e-15 relative).
 

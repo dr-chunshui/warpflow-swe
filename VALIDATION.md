@@ -127,6 +127,7 @@ python tests/test_mass.py         # closed-domain mass, orders 1 and 2
 python tests/test_riemann.py      # HLLC flux properties
 python tests/test_analytic.py     # analytic solutions (incl. official
                                   #  bump analytic_sol.py comparison)
+python tests/test_sources.py      # source terms (wind stress, friction)
 python tests/convergence_ritter.py# L1 refinement study
 ```
 
