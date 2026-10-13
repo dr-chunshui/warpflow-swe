@@ -30,18 +30,20 @@ class MonitorWriter:
 
 
 class MassWriter:
-    """Global history: t, mass, dt, min_h, max_h."""
+    """Global history: t, mass, q_bc (cumulative net boundary inflow
+    volume), dt, min_h, max_h."""
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._f = open(self.path, "w", newline="", encoding="ascii")
         self._w = csv.writer(self._f)
-        self._w.writerow(["t", "mass", "dt", "h_min", "h_max"])
+        self._w.writerow(["t", "mass", "q_bc", "dt", "h_min", "h_max"])
 
-    def write(self, t: float, mass: float, dt: float, hmin: float, hmax: float) -> None:
-        self._w.writerow([f"{t:.6f}", f"{mass:.12g}", f"{dt:.10g}",
-                          f"{hmin:.10g}", f"{hmax:.10g}"])
+    def write(self, t: float, mass: float, qbc: float, dt: float,
+              hmin: float, hmax: float) -> None:
+        self._w.writerow([f"{t:.6f}", f"{mass:.12g}", f"{qbc:.12g}",
+                          f"{dt:.10g}", f"{hmin:.10g}", f"{hmax:.10g}"])
         self._f.flush()
 
     def close(self) -> None:

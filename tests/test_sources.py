@@ -104,7 +104,7 @@ def test_harmonic_bc() -> None:
     mesh = rect_mesh(0.0, 2.0, 0.0, 0.4, dx=0.2)
     s = ShallowWaterSolver(cfg, mesh)
     mean, amp, period, phase = 10.0, 0.05, 0.5, 0.3
-    inlet_edges = s._time_groups[0][0]
+    inlet_edges = s._time_groups[0]["edges"]
     for t in (0.0, 0.125, 0.25, 0.437):
         s.update_time_bcs(t)
         got = s._bparam_host[inlet_edges]

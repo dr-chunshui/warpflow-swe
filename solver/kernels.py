@@ -231,8 +231,18 @@ def ghost_state(
             ug = wp.float64(0.0)
             vg = wp.float64(0.0)
         else:
-            # supercritical outflow: no information (cdl_fv.f)
-            hg = ha
+            # Supercritical outflow.  cdl_fv.f uses hg = ha ("no
+            # information"), but with a cell-centred edge flux that makes
+            # the boundary perfectly transparent: an inviscid draw-down
+            # then runs away into a supercritical film below the imposed
+            # level (seen on the balzano case; TELEMAC avoids the runaway
+            # through its node-centred update and larger boundary
+            # diffusion, and its results overshoot early and re-converge
+            # to the prescribed level).  Model the sea as the infinite
+            # reservoir the level boundary declares: keep the prescribed
+            # depth, zero velocity -- the resulting step drives the
+            # hydraulic jump that re-anchors the flow at the level.
+            hg = wp.max(zs - zba, wp.float64(0.0))
             ug = wp.float64(0.0)
             vg = wp.float64(0.0)
     else:  # BC_INFLOW_Q
@@ -691,6 +701,41 @@ def k_friction(
     alpha = G * spd / (kf * kf * h * wp.cbrt(h))  # g|u| / (K^2 h^(4/3))
     w[c] = wp.vec3d(h, hu / (wp.float64(1.0) + dt * alpha),
                     hv / (wp.float64(1.0) + dt * alpha))
+
+
+# ---------------------------------------------------------------------------
+# Coriolis acceleration (tide case): d(hu)/dt = f hv, d(hv)/dt = -f hu.
+# Pure rotation of the momentum vector -- conservative rate * area, no
+# h division.  Inert on dry cells (h = 0 there).
+# ---------------------------------------------------------------------------
+@wp.kernel
+def k_coriolis(
+    w: wp.array(dtype=wp.vec3d),
+    cell_area: wp.array(dtype=wp.float64),
+    rhs: wp.array(dtype=wp.vec3d),
+    f: wp.float64,
+):
+    c = wp.tid()
+    a = cell_area[c]
+    rhs[c] = rhs[c] + wp.vec3d(
+        wp.float64(0.0), a * f * w[c][2], -a * f * w[c][1])
+
+
+# ---------------------------------------------------------------------------
+# Accumulate the per-group boundary volume rate into a running total:
+# bcvol[g] += rate[g] * weight.  k_flux resets bflux each call and stacks
+# the OUTFLOWING mass rate (le * f0, outward normal), so the exact update
+# accounting is bcvol += bflux * dt * stage_weight (weight 1 for Euler,
+# 0.5 per RK2 stage).  Net inflow volume = -sum(bcvol).
+# ---------------------------------------------------------------------------
+@wp.kernel
+def k_acc_f64(
+    rate: wp.array(dtype=wp.float64),
+    dst: wp.array(dtype=wp.float64),
+    s: wp.float64,
+):
+    i = wp.tid()
+    dst[i] = dst[i] + rate[i] * s
 
 
 # ---------------------------------------------------------------------------

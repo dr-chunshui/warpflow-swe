@@ -25,10 +25,11 @@ acceptance numbers and reproduction steps.
   on near-dry states (see VALIDATION.md note 7 for why).
 - **Boundaries** — wall (mirror), outflow (zero-gradient), prescribed
   discharge (cdl_fv.f algorithm) and prescribed free-surface elevation
-  (steady or harmonic in time).
+  (steady, harmonic in time, or a two-column time/level series file —
+  e.g. a recorded wave-gauge signal).
 - **Sources** — wind stress (TELEMAC option 2, conservative momentum
-  form) and Strickler bottom friction (semi-implicit Riccati splitting,
-  stable for any dt).
+  form), Strickler bottom friction (semi-implicit Riccati splitting,
+  stable for any dt) and Coriolis (conservative rotation form).
 - **Outputs** — `.vtu` frames + `.pvd` for ParaView, monitor-point and
   mass-history CSV, analytic-comparison profiles with L1/L2 norms.
 - **YAML-driven cases** — geometry, physics, numerics, boundaries and
@@ -65,6 +66,11 @@ analytic solution is configured, `compare.png` + `errors.csv`.
 | Friction GVF, slope + Strickler | 1 | L1(h) 3.3e-2 m = 0.3% of depth vs the steady GVF profile |
 | Harmonic progressive wave | 1 | L1(u) 6.9e-3, boundary-limited; interior-only 1.2e-3 (~1.5 orders) |
 | Wind setup, closed basin | 1 | time-mean L1(h) 9.7e-4 m = 0.12% of the set-up dz |
+| Balzano tidal-flat draw-down | 1 | L1(h) 5.3e-2 m at t = 70000 s; left reservoir locked at the sill crest; severe wet/dry |
+| Canal stage-discharge flow | 1 | L1(h) 6.4e-4 m vs the steady GVF profile (surface 0.745 -> 0.53 m) |
+| Vasque draw-down over a pool | 1 | L1(h) 4.8e-3 m; pool ponds at its spill level; partial drying |
+| Tests-channel solitary-wave run-up | 1 | R/d 0.106 (0.099 with Cf = 0.001) vs experiment 0.076 / TELEMAC FV 0.084 |
+| Gouttedo droplet, closed / open | 1 | mass 999.7833 vs 999.784 m3 (closed); outflow 31.2 vs 27.8 m3 (open) |
 
 Closed-domain mass is conserved to machine precision (~1e-15 relative).
 

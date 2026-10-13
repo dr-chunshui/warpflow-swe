@@ -1,0 +1,223 @@
+# Solitary-wave run-up on a plane beach (TELEMAC validation manual
+# ch. 48, tests_channel; Synolakis experiments).  50 x 1 m flume,
+# depth d = 0.3832 m, flat to the toe at x = 14.68 m, then a 1:19.85
+# slope.  The incident wave is the recorded gauge series
+# slts_38p32cm.prn (Synolakis run 041, H = 0.0149 m -> H/d = 0.039,
+# case 1) imposed as the x = 0 level boundary; other faces are
+# perfect-slip walls (the x = 50 face is ~1.3 m above the still
+# waterline and never wets).  Frictionless, as the FV column of the
+# manual run-up table; target R/d = 0.084 (TELEMAC FV), experiment
+# 0.076/0.078 (Synolakis).  Run-up is the time maximum of the free
+# surface over the slope monitors below (0.125 m spacing).  No
+# analytic solution: validation is the run-up metric.  TELEMAC runs
+# 60 s at dt = 0.05.
+case:
+  name: tests_channel_cf
+  analytic: ""
+  t_end: 60.0
+
+mesh:
+  type: rect
+  xmin: 0.0
+  xmax: 50.0
+  ymin: 0.0
+  ymax: 1.0
+  dx: 0.25
+  diagonal: alternating
+
+physics:
+  g: 9.81
+  strickler: 116.0   # quadratic-drag equivalent of the manual's Cf = 0.001
+
+initial:
+  type: lake_at_rest
+  params: {zs: 0.3832}
+
+bathymetry:
+  type: beach
+  params: {toe: 14.68, slope_inv: 19.85}
+
+boundary:
+  groups:
+    - {name: wavemaker, select: {xmin: [0.0, 1.0]}, type: level,
+       value: 0.3832, time: {series: slts_38p32cm.prn}}
+    - {name: walls_xmax, select: {xmax: [0.0, 1.0]}, type: wall}
+    - {name: walls_ymin, select: {ymin: [0.0, 50.0]}, type: wall}
+    - {name: walls_ymax, select: {ymax: [0.0, 50.0]}, type: wall}
+
+numerics:
+  cfl: 0.9
+  order: 1
+  limiter: barth
+  time_order: 1
+  eps_dry: 1.0e-6
+
+output:
+  dir: output/tests_channel_cf
+  vtk_interval: 2.0
+  csv_interval: 0.1
+  monitors:
+    - {name: flat, x: 5.0, y: 0.5}
+    - {name: s120, x: 15.0, y: 0.5}
+    - {name: s121, x: 15.125, y: 0.5}
+    - {name: s122, x: 15.25, y: 0.5}
+    - {name: s123, x: 15.375, y: 0.5}
+    - {name: s124, x: 15.5, y: 0.5}
+    - {name: s125, x: 15.625, y: 0.5}
+    - {name: s126, x: 15.75, y: 0.5}
+    - {name: s127, x: 15.875, y: 0.5}
+    - {name: s128, x: 16.0, y: 0.5}
+    - {name: s129, x: 16.125, y: 0.5}
+    - {name: s130, x: 16.25, y: 0.5}
+    - {name: s131, x: 16.375, y: 0.5}
+    - {name: s132, x: 16.5, y: 0.5}
+    - {name: s133, x: 16.625, y: 0.5}
+    - {name: s134, x: 16.75, y: 0.5}
+    - {name: s135, x: 16.875, y: 0.5}
+    - {name: s136, x: 17.0, y: 0.5}
+    - {name: s137, x: 17.125, y: 0.5}
+    - {name: s138, x: 17.25, y: 0.5}
+    - {name: s139, x: 17.375, y: 0.5}
+    - {name: s140, x: 17.5, y: 0.5}
+    - {name: s141, x: 17.625, y: 0.5}
+    - {name: s142, x: 17.75, y: 0.5}
+    - {name: s143, x: 17.875, y: 0.5}
+    - {name: s144, x: 18.0, y: 0.5}
+    - {name: s145, x: 18.125, y: 0.5}
+    - {name: s146, x: 18.25, y: 0.5}
+    - {name: s147, x: 18.375, y: 0.5}
+    - {name: s148, x: 18.5, y: 0.5}
+    - {name: s149, x: 18.625, y: 0.5}
+    - {name: s150, x: 18.75, y: 0.5}
+    - {name: s151, x: 18.875, y: 0.5}
+    - {name: s152, x: 19.0, y: 0.5}
+    - {name: s153, x: 19.125, y: 0.5}
+    - {name: s154, x: 19.25, y: 0.5}
+    - {name: s155, x: 19.375, y: 0.5}
+    - {name: s156, x: 19.5, y: 0.5}
+    - {name: s157, x: 19.625, y: 0.5}
+    - {name: s158, x: 19.75, y: 0.5}
+    - {name: s159, x: 19.875, y: 0.5}
+    - {name: s160, x: 20.0, y: 0.5}
+    - {name: s161, x: 20.125, y: 0.5}
+    - {name: s162, x: 20.25, y: 0.5}
+    - {name: s163, x: 20.375, y: 0.5}
+    - {name: s164, x: 20.5, y: 0.5}
+    - {name: s165, x: 20.625, y: 0.5}
+    - {name: s166, x: 20.75, y: 0.5}
+    - {name: s167, x: 20.875, y: 0.5}
+    - {name: s168, x: 21.0, y: 0.5}
+    - {name: s169, x: 21.125, y: 0.5}
+    - {name: s170, x: 21.25, y: 0.5}
+    - {name: s171, x: 21.375, y: 0.5}
+    - {name: s172, x: 21.5, y: 0.5}
+    - {name: s173, x: 21.625, y: 0.5}
+    - {name: s174, x: 21.75, y: 0.5}
+    - {name: s175, x: 21.875, y: 0.5}
+    - {name: s176, x: 22.0, y: 0.5}
+    - {name: s177, x: 22.125, y: 0.5}
+    - {name: s178, x: 22.25, y: 0.5}
+    - {name: s179, x: 22.375, y: 0.5}
+    - {name: s180, x: 22.5, y: 0.5}
+    - {name: s181, x: 22.625, y: 0.5}
+    - {name: s182, x: 22.75, y: 0.5}
+    - {name: s183, x: 22.875, y: 0.5}
+    - {name: s184, x: 23.0, y: 0.5}
+    - {name: s185, x: 23.125, y: 0.5}
+    - {name: s186, x: 23.25, y: 0.5}
+    - {name: s187, x: 23.375, y: 0.5}
+    - {name: s188, x: 23.5, y: 0.5}
+    - {name: s189, x: 23.625, y: 0.5}
+    - {name: s190, x: 23.75, y: 0.5}
+    - {name: s191, x: 23.875, y: 0.5}
+    - {name: s192, x: 24.0, y: 0.5}
+    - {name: s193, x: 24.125, y: 0.5}
+    - {name: s194, x: 24.25, y: 0.5}
+    - {name: s195, x: 24.375, y: 0.5}
+    - {name: s196, x: 24.5, y: 0.5}
+    - {name: s197, x: 24.625, y: 0.5}
+    - {name: s198, x: 24.75, y: 0.5}
+    - {name: s199, x: 24.875, y: 0.5}
+    - {name: s200, x: 25.0, y: 0.5}
+    - {name: s201, x: 25.125, y: 0.5}
+    - {name: s202, x: 25.25, y: 0.5}
+    - {name: s203, x: 25.375, y: 0.5}
+    - {name: s204, x: 25.5, y: 0.5}
+    - {name: s205, x: 25.625, y: 0.5}
+    - {name: s206, x: 25.75, y: 0.5}
+    - {name: s207, x: 25.875, y: 0.5}
+    - {name: s208, x: 26.0, y: 0.5}
+    - {name: s209, x: 26.125, y: 0.5}
+    - {name: s210, x: 26.25, y: 0.5}
+    - {name: s211, x: 26.375, y: 0.5}
+    - {name: s212, x: 26.5, y: 0.5}
+    - {name: s213, x: 26.625, y: 0.5}
+    - {name: s214, x: 26.75, y: 0.5}
+    - {name: s215, x: 26.875, y: 0.5}
+    - {name: s216, x: 27.0, y: 0.5}
+    - {name: s217, x: 27.125, y: 0.5}
+    - {name: s218, x: 27.25, y: 0.5}
+    - {name: s219, x: 27.375, y: 0.5}
+    - {name: s220, x: 27.5, y: 0.5}
+    - {name: s221, x: 27.625, y: 0.5}
+    - {name: s222, x: 27.75, y: 0.5}
+    - {name: s223, x: 27.875, y: 0.5}
+    - {name: s224, x: 28.0, y: 0.5}
+    - {name: s225, x: 28.125, y: 0.5}
+    - {name: s226, x: 28.25, y: 0.5}
+    - {name: s227, x: 28.375, y: 0.5}
+    - {name: s228, x: 28.5, y: 0.5}
+    - {name: s229, x: 28.625, y: 0.5}
+    - {name: s230, x: 28.75, y: 0.5}
+    - {name: s231, x: 28.875, y: 0.5}
+    - {name: s232, x: 29.0, y: 0.5}
+    - {name: s233, x: 29.125, y: 0.5}
+    - {name: s234, x: 29.25, y: 0.5}
+    - {name: s235, x: 29.375, y: 0.5}
+    - {name: s236, x: 29.5, y: 0.5}
+    - {name: s237, x: 29.625, y: 0.5}
+    - {name: s238, x: 29.75, y: 0.5}
+    - {name: s239, x: 29.875, y: 0.5}
+    - {name: s240, x: 30.0, y: 0.5}
+    - {name: s241, x: 30.125, y: 0.5}
+    - {name: s242, x: 30.25, y: 0.5}
+    - {name: s243, x: 30.375, y: 0.5}
+    - {name: s244, x: 30.5, y: 0.5}
+    - {name: s245, x: 30.625, y: 0.5}
+    - {name: s246, x: 30.75, y: 0.5}
+    - {name: s247, x: 30.875, y: 0.5}
+    - {name: s248, x: 31.0, y: 0.5}
+    - {name: s249, x: 31.125, y: 0.5}
+    - {name: s250, x: 31.25, y: 0.5}
+    - {name: s251, x: 31.375, y: 0.5}
+    - {name: s252, x: 31.5, y: 0.5}
+    - {name: s253, x: 31.625, y: 0.5}
+    - {name: s254, x: 31.75, y: 0.5}
+    - {name: s255, x: 31.875, y: 0.5}
+    - {name: s256, x: 32.0, y: 0.5}
+    - {name: s257, x: 32.125, y: 0.5}
+    - {name: s258, x: 32.25, y: 0.5}
+    - {name: s259, x: 32.375, y: 0.5}
+    - {name: s260, x: 32.5, y: 0.5}
+    - {name: s261, x: 32.625, y: 0.5}
+    - {name: s262, x: 32.75, y: 0.5}
+    - {name: s263, x: 32.875, y: 0.5}
+    - {name: s264, x: 33.0, y: 0.5}
+    - {name: s265, x: 33.125, y: 0.5}
+    - {name: s266, x: 33.25, y: 0.5}
+    - {name: s267, x: 33.375, y: 0.5}
+    - {name: s268, x: 33.5, y: 0.5}
+    - {name: s269, x: 33.625, y: 0.5}
+    - {name: s270, x: 33.75, y: 0.5}
+    - {name: s271, x: 33.875, y: 0.5}
+    - {name: s272, x: 34.0, y: 0.5}
+    - {name: s273, x: 34.125, y: 0.5}
+    - {name: s274, x: 34.25, y: 0.5}
+    - {name: s275, x: 34.375, y: 0.5}
+    - {name: s276, x: 34.5, y: 0.5}
+    - {name: s277, x: 34.625, y: 0.5}
+    - {name: s278, x: 34.75, y: 0.5}
+    - {name: s279, x: 34.875, y: 0.5}
+    - {name: s280, x: 35.0, y: 0.5}
+  centerline_y: 0.5
+  band: 0.05

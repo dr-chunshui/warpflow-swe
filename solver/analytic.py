@@ -393,10 +393,15 @@ def friction_gvf(cfg, t, x, y):
         dh/dx = (S0 - Sf) / (1 - Fr^2),
     marched upstream from the downstream (level) control with RK4.
     All parameters come from the yaml: discharge from the inflow_q group,
-    outlet level from the xmax level group, slope from the bathymetry,
-    Strickler K from physics.
+    outlet level from the xmax level group, slope from the bathymetry
+    (exact for the linear beds the GVF reference applies to; zero for a
+    flat bed, e.g. the canal case), Strickler K from physics.
     """
-    S0 = -float(cfg.bathymetry.params["slope"])
+    from .state import bathymetry_at
+    xa = np.array([cfg.mesh.xmin, cfg.mesh.xmax])
+    zb_ends = bathymetry_at(cfg, xa, np.zeros(2))
+    S0 = float((zb_ends[0] - zb_ends[1])
+               / (cfg.mesh.xmax - cfg.mesh.xmin))
     width = cfg.mesh.ymax - cfg.mesh.ymin
     L = cfg.mesh.xmax - cfg.mesh.xmin
     q_in = 0.0
@@ -410,8 +415,9 @@ def friction_gvf(cfg, t, x, y):
         raise ValueError("friction_gvf needs an inflow_q and an xmax "
                          "level boundary group")
     q = q_in / width
-    zb_out = float(cfg.bathymetry.params["z0"]) \
-        + float(cfg.bathymetry.params["slope"]) * cfg.mesh.xmax
+    zb_out = float(bathymetry_at(
+        cfg, np.array([cfg.mesh.xmax]),
+        np.array([0.5 * (cfg.mesh.ymin + cfg.mesh.ymax)]))[0])
     h_out = zs_out - zb_out
     xs, hs = _gvf_profile(q, cfg.strickler, S0, L, h_out)
     h = np.interp(x, xs, hs)
@@ -497,6 +503,48 @@ def wind_setup(cfg, t, x, y):
             hi = mid
     h0 = 0.5 * (lo + hi)
     h = np.sqrt(h0 * h0 + a * x)
+    return h, np.zeros_like(x), np.zeros_like(x)
+
+
+# ----------------------------------------------------------------------
+# Tidal-flat draw-down equilibrium (TELEMAC validation manual ch. 3,
+# balzano): at t -> inf both reaches are lakes at rest.  The right reach
+# drains to the imposed boundary level zs = -2 m; the left reservoir is
+# trapped behind the sill and settles at the crest elevation
+# zs = zb(4800) = 100/23 - 4800/920 = -0.8695652174 m (manual section
+# 3.2.5, DATA/SL_reservoir.txt).  Beaches above the local lake level
+# are dry.
+# ----------------------------------------------------------------------
+@_register("balzano_drain")
+def balzano_drain(cfg, t, x, y):
+    from .state import bathymetry_at
+    zb = bathymetry_at(cfg, x, y)
+    crest = 100.0 / 23.0 - 4800.0 / 920.0
+    zs = np.where(x < 4800.0, crest, -2.0)
+    h = np.maximum(zs - zb, 0.0)
+    return h, np.zeros_like(x), np.zeros_like(x)
+
+
+# ----------------------------------------------------------------------
+# Draw-down over a pool (TELEMAC validation manual ch. 54, vasque)
+# ----------------------------------------------------------------------
+@_register("vasque_dry")
+def vasque_dry(cfg, t, x, y):
+    """Final equilibrium of the draw-down over the vasque (pool).
+
+    The offshore boundary falls to zs = -0.55 m over 300 s.  At the end
+    the seaward beach (rising 0.01 per m) rests at the sea level while
+    the depression landward of the Gaussian hump stays ponded at its
+    spill level: the bed crest near x = 19,
+        zb(19) = -0.6 + 0.01*19 + 0.1*exp(-1/20) = -0.3149 m,
+    like the manual's final state (level horizontal in the pool, zero
+    velocity on both sides).  h = max(zs - zb, 0), u = v = 0.
+    """
+    from .state import bathymetry_at
+    zb = bathymetry_at(cfg, x, y)
+    spill = -0.6 + 0.01 * 19.0 + 0.1 * np.exp(-1.0 / 20.0)
+    zs = np.where(x < 19.0, -0.55, spill)
+    h = np.maximum(zs - zb, 0.0)
     return h, np.zeros_like(x), np.zeros_like(x)
 
 

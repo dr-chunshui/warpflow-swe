@@ -21,6 +21,32 @@ from .mesh import TriMesh, classify_boundaries
 from .state import bathymetry_at, build_bathymetry, build_initial, nearest_cell
 
 
+def _load_level_series(path: str) -> tuple[np.ndarray, np.ndarray]:
+    """Two-column time/elevation table for a level boundary.
+
+    Whitespace- or comma-separated; lines that do not start with a number
+    (headers, comments) are skipped -- TELEMAC liquid-boundary files and
+    .prn gauge records both parse.
+    """
+    ts, zs = [], []
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            for tok in line.replace(",", " ").split(";"):
+                parts = tok.split()
+                if len(parts) < 2:
+                    continue
+                try:
+                    tv = float(parts[0])
+                    zv = float(parts[1])
+                except ValueError:
+                    continue
+                ts.append(tv)
+                zs.append(zv)
+    if len(ts) < 2:
+        raise ValueError(f"{path}: need at least two time/elevation rows")
+    return np.asarray(ts, dtype=np.float64), np.asarray(zs, dtype=np.float64)
+
+
 class ShallowWaterSolver:
     def __init__(self, cfg: CaseConfig, mesh: TriMesh):
         self.cfg = cfg
@@ -75,21 +101,31 @@ class ShallowWaterSolver:
         ])
         bedge_group = np.full(ne, -1, dtype=np.int32)
         bparam = np.zeros(ne, dtype=np.float64)
-        self._time_groups = []  # (edge_idx, mean, amp, period, phase)
+        self._time_groups = []  # harmonic/series level boundary descriptors
         for gi, grp in enumerate(groups):
             sel_edges = mesh.boundary_edges[group_of == gi]
             bedge_group[sel_edges] = gi
             if grp.type == "level":
                 if grp.time:
-                    # harmonic level: zs(t) = mean + amp*sin(2 pi t/T + ph)
                     ts = grp.time
-                    mean = float(ts["mean"])
-                    amp = float(ts["amp"])
-                    period = float(ts["period"])
-                    phase = float(ts.get("phase", 0.0))
-                    self._time_groups.append(
-                        (sel_edges, mean, amp, period, phase))
-                    bparam[sel_edges] = mean + amp * np.sin(phase)
+                    if "series" in ts:
+                        # file-driven level: two-column table, np.interp
+                        t_arr, z_arr = _load_level_series(ts["series"])
+                        self._time_groups.append(
+                            {"edges": sel_edges, "kind": "series",
+                             "t": t_arr, "z": z_arr})
+                        bparam[sel_edges] = np.interp(0.0, t_arr, z_arr)
+                    else:
+                        # harmonic level: zs(t) = mean + amp*sin(2 pi t/T + ph)
+                        mean = float(ts["mean"])
+                        amp = float(ts["amp"])
+                        period = float(ts["period"])
+                        phase = float(ts.get("phase", 0.0))
+                        self._time_groups.append(
+                            {"edges": sel_edges, "kind": "harm",
+                             "mean": mean, "amp": amp, "period": period,
+                             "phase": phase})
+                        bparam[sel_edges] = mean + amp * np.sin(phase)
                 else:
                     bparam[sel_edges] = grp.value
             elif grp.type == "inflow_q":
@@ -106,6 +142,7 @@ class ShallowWaterSolver:
             dtype=wp.int32)
         self.bparam = wp.array(bparam, dtype=wp.float64)
         self.bflux = wp.zeros(self.n_groups, dtype=wp.float64)
+        self._bcvol = wp.zeros(self.n_groups, dtype=wp.float64)
         self._group_of = group_of
         self._bparam_host = bparam
 
@@ -126,6 +163,7 @@ class ShallowWaterSolver:
 
         self.t = 0.0
         self.step_count = 0
+        self._mass0 = self.mass()
 
     # ------------------------------------------------------------------
     def _initial_state(self, mesh: TriMesh) -> np.ndarray:
@@ -134,12 +172,17 @@ class ShallowWaterSolver:
 
     # ------------------------------------------------------------------
     def update_time_bcs(self, t: float) -> None:
-        """Refresh harmonic level boundary values at time t (no-op if none)."""
+        """Refresh time-dependent level boundary values at time t (no-op
+        if all boundaries are steady)."""
         if not self._time_groups:
             return
-        for edges, mean, amp, period, phase in self._time_groups:
-            self._bparam_host[edges] = mean + amp * np.sin(
-                2.0 * np.pi * t / period + phase)
+        for grp in self._time_groups:
+            if grp["kind"] == "series":
+                z = float(np.interp(t, grp["t"], grp["z"]))
+            else:
+                z = grp["mean"] + grp["amp"] * np.sin(
+                    2.0 * np.pi * t / grp["period"] + grp["phase"])
+            self._bparam_host[grp["edges"]] = z
         self.bparam = wp.array(self._bparam_host, dtype=wp.float64)
 
     # ------------------------------------------------------------------
@@ -154,8 +197,21 @@ class ShallowWaterSolver:
         return min(dt, t_remaining)
 
     # ------------------------------------------------------------------
-    def _evaluate_rhs(self, w_state: wp.array) -> None:
-        """rhs = -div F(w_state) + S; resets rhs and bflux first."""
+    def boundary_inflow(self) -> float:
+        """Cumulative net inflow VOLUME [m^3] through all open boundaries
+        since t = 0 (exact accounting of the discrete update)."""
+        if self.n_groups == 0:
+            return 0.0
+        return -float(self._bcvol.numpy().sum())
+
+    # ------------------------------------------------------------------
+    def _evaluate_rhs(self, w_state: wp.array, dtw: float = 0.0) -> None:
+        """rhs = -div F(w_state) + S; resets rhs and bflux first.
+
+        dtw > 0 additionally accumulates the boundary volume update
+        (bflux * dtw) into self._bcvol; callers pass dt (Euler) or
+        dt/2 per RK2 stage so boundary_inflow() integrates the exact
+        flux that entered the discrete update."""
         wp.launch(K.k_zero_vec3, dim=self.n_cells, inputs=[self.rhs])
         wp.launch(K.k_zero_f64, dim=self.n_groups, inputs=[self.bflux])
         if self.cfg.order == 2:
@@ -186,12 +242,18 @@ class ShallowWaterSolver:
                 w_state, self.area, self.rhs,
                 wp.float64(self.cfg.wind_u), wp.float64(self.cfg.wind_v),
                 wp.float64(self.cfg.wind_coeff)])
+        if self.cfg.coriolis != 0.0:
+            wp.launch(K.k_coriolis, dim=self.n_cells, inputs=[
+                w_state, self.area, self.rhs, wp.float64(self.cfg.coriolis)])
+        if dtw != 0.0:
+            wp.launch(K.k_acc_f64, dim=self.n_groups, inputs=[
+                self.bflux, self._bcvol, wp.float64(dtw)])
 
     # ------------------------------------------------------------------
     def step(self, dt: float) -> None:
         """Advance the state by one explicit step of size dt."""
         if self.cfg.time_order == 1:
-            self._evaluate_rhs(self.w)
+            self._evaluate_rhs(self.w, dt)
             wp.launch(K.k_update, dim=self.n_cells, inputs=[
                 self.w, self.rhs, self.area, wp.float64(dt), self.wb])
             if self.strickler is not None:
@@ -200,13 +262,13 @@ class ShallowWaterSolver:
             self.w, self.wb = self.wb, self.w
         else:
             # SSP-RK2: w1 = w + dt L(w); w_new = 0.5 (w + w1 + dt L(w1))
-            self._evaluate_rhs(self.w)
+            self._evaluate_rhs(self.w, 0.5 * dt)
             wp.launch(K.k_update, dim=self.n_cells, inputs=[
                 self.w, self.rhs, self.area, wp.float64(dt), self.w2])
             if self.strickler is not None:
                 wp.launch(K.k_friction, dim=self.n_cells, inputs=[
                     self.w2, self.strickler, wp.float64(dt)])
-            self._evaluate_rhs(self.w2)
+            self._evaluate_rhs(self.w2, 0.5 * dt)
             wp.launch(K.k_update, dim=self.n_cells, inputs=[
                 self.w2, self.rhs, self.area, wp.float64(dt), self.wb])
             if self.strickler is not None:
@@ -268,7 +330,8 @@ class ShallowWaterSolver:
             vals = [(snap["h"][c], snap["u"][c], snap["v"][c])
                     for c in self.monitor_cells]
             mon.write(self.t, vals)
-            mw.write(self.t, self.mass(), self._last_dt if hasattr(self, "_last_dt") else 0.0,
+            mw.write(self.t, self.mass(), self.boundary_inflow(),
+                     self._last_dt if hasattr(self, "_last_dt") else 0.0,
                      float(snap["h"].min()), float(snap["h"].max()))
 
         if vtk_on:
@@ -319,5 +382,11 @@ class ShallowWaterSolver:
 
         mon.close()
         mw.close()
-        print(f"done: {self.step_count} steps, t = {self.t:.4f} s, "
-              f"mass = {self.mass():.12g} m^3 -> {out_dir}")
+        m_fin = self.mass()
+        qbc = self.boundary_inflow()
+        msg = (f"done: {self.step_count} steps, t = {self.t:.4f} s, "
+               f"mass = {m_fin:.12g} m^3")
+        if abs(qbc) > 0.0:
+            msg += (f", q_bc = {qbc:.12g} m^3, mass-balance residual = "
+                    f"{m_fin - self._mass0 - qbc:.3e} m^3")
+        print(msg + f" -> {out_dir}")

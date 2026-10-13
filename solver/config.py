@@ -79,9 +79,12 @@ class BoundaryGroup:
     type: str  # wall | outflow | inflow_q | level
     value: float = 0.0  # zs for level [m], Q total for inflow_q [m^3/s]
     time: dict = field(default_factory=dict)
-    # time-dependent level value: zs(t) = mean + amp*sin(2*pi*t/period+phase)
-    # keys: mean, amp, period; optional phase [rad] (default 0).  When
-    # ``time`` is non-empty it overrides ``value`` for ``level`` groups.
+    # time-dependent level value, either
+    #   harmonic: zs(t) = mean + amp*sin(2*pi*t/period+phase)
+    #     keys: mean, amp, period; optional phase [rad] (default 0), or
+    #   series: {file: <path>} -- two-column time/elevation table,
+    #     linearly interpolated (TELEMAC liquid-boundary file).
+    # When ``time`` is non-empty it overrides ``value`` for ``level`` groups.
 
 
 @dataclass
@@ -115,6 +118,7 @@ class CaseConfig:
     wind_u: float = 0.0  # wind velocity [m/s]
     wind_v: float = 0.0
     wind_coeff: float = 0.0  # a_wind * rho_air / rho_water, 0 = off
+    coriolis: float = 0.0  # Coriolis parameter f = 2*Omega*sin(lat) [1/s]
 
 
 def _require(cond: bool, msg: str) -> None:
@@ -153,7 +157,8 @@ def load_config(path: str | Path) -> CaseConfig:
     bath = raw.get("bathymetry") or {"type": "flat", "params": {}}
     bathcfg = BathymetryConfig(type=bath.get("type", "flat"),
                                params=dict(bath.get("params") or {}))
-    _require(bathcfg.type in ("flat", "bump", "thacker", "slope"),
+    _require(bathcfg.type in ("flat", "bump", "thacker", "slope", "bolzano",
+                              "beach", "vasque"),
              f"{path}: unknown bathymetry type {bathcfg.type!r}")
 
     groups_raw = (raw.get("boundary") or {}).get("groups") or []
@@ -174,10 +179,20 @@ def load_config(path: str | Path) -> CaseConfig:
         if tspec:
             _require(g["type"] == "level",
                      f"{path}: time-dependent value only for level: {g['name']}")
-            _require("mean" in tspec and "amp" in tspec and "period" in tspec,
-                     f"{path}: bc time needs mean/amp/period: {g['name']}")
-            _require(float(tspec["period"]) > 0.0,
-                     f"{path}: bc time period must be positive: {g['name']}")
+            if "series" in tspec:
+                # file-driven level boundary: resolve the path against the
+                # yaml's directory so cases stay relocatable
+                fp = Path(str(tspec["series"]))
+                if not fp.is_absolute():
+                    fp = path.parent / fp
+                _require(fp.is_file(),
+                         f"{path}: bc series file missing: {fp}")
+                tspec = {"series": str(fp)}
+            else:
+                _require("mean" in tspec and "amp" in tspec and "period" in tspec,
+                         f"{path}: bc time needs mean/amp/period or series: {g['name']}")
+                _require(float(tspec["period"]) > 0.0,
+                         f"{path}: bc time period must be positive: {g['name']}")
         elif g["type"] in BC_WITH_VALUE:
             _require("value" in g,
                      f"{path}: bc {g['type']} needs value: {g.get('name')}")
@@ -213,6 +228,7 @@ def load_config(path: str | Path) -> CaseConfig:
     strickler = float(phys.get("strickler", 0.0))
     _require(strickler >= 0.0, f"{path}: physics.strickler must be >= 0")
     wind = dict(phys.get("wind") or {})
+    coriolis = float(phys.get("coriolis", 0.0))
     return CaseConfig(
         name=str(case["name"]),
         analytic=str(case.get("analytic", "")),
@@ -232,4 +248,5 @@ def load_config(path: str | Path) -> CaseConfig:
         wind_u=float(wind.get("u", 0.0)),
         wind_v=float(wind.get("v", 0.0)),
         wind_coeff=float(wind.get("coeff", 0.0)),
+        coriolis=coriolis,
     )

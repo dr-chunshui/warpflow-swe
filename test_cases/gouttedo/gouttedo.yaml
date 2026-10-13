@@ -1,0 +1,59 @@
+# Gaussian droplet in a closed square basin (TELEMAC validation manual
+# ch. 28, gouttedo, wall variant).  20.1 x 20.1 m flat bottom; at-rest
+# h = 2.4*(1 + exp(-((x-10.05)^2 + (y-10.05)^2)/4)) (user_condin_h.f;
+# the printed manual formula drops the y square -- a typo), initial
+# volume 999.784 m^3.  All boundaries are perfect-slip walls: the wave
+# must reflect symmetrically with no mesh-polarisation bias and the mass
+# must be conserved exactly (manual section 28.5).  Long-wave celerity
+# 4.85-6.86 m/s: the peak reaches the walls after ~1.6-2.0 s and the
+# reflected waves interact at t ~ 2.4 s.  Frictionless; TELEMAC runs
+# 4 s at dt = 0.04.
+case:
+  name: gouttedo
+  analytic: ""
+  t_end: 4.0
+
+mesh:
+  type: rect
+  xmin: 0.0
+  xmax: 20.1
+  ymin: 0.0
+  ymax: 20.1
+  dx: 0.3
+  diagonal: alternating
+
+physics:
+  g: 9.81
+
+initial:
+  type: gaussian_hump
+  params: {h0: 2.4, amp: 2.4, x0: 10.05, y0: 10.05, s2: 4.0}
+
+bathymetry:
+  type: flat
+  params: {z: 0.0}
+
+boundary:
+  groups:
+    - {name: walls_xmin, select: {xmin: [0.0, 20.1]}, type: wall}
+    - {name: walls_xmax, select: {xmax: [0.0, 20.1]}, type: wall}
+    - {name: walls_ymin, select: {ymin: [0.0, 20.1]}, type: wall}
+    - {name: walls_ymax, select: {ymax: [0.0, 20.1]}, type: wall}
+
+numerics:
+  cfl: 0.9
+  order: 1
+  limiter: barth
+  time_order: 1
+  eps_dry: 1.0e-6
+
+output:
+  dir: output/gouttedo
+  vtk_interval: 0.4
+  csv_interval: 0.05
+  monitors:
+    - {name: center,  x: 10.05, y: 10.05}
+    - {name: mid,     x: 15.00, y: 10.05}
+    - {name: nearwall, x: 19.95, y: 10.05}
+  centerline_y: 10.05
+  band: 0.29

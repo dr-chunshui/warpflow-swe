@@ -33,6 +33,34 @@ def bathymetry_at(cfg: CaseConfig, x: np.ndarray, y: np.ndarray) -> np.ndarray:
         return h0 * (r2 / (a * a) - 1.0)
     if kind == "slope":  # plane bed, zb = z0 + slope*x (x absolute)
         return float(p["z0"]) + float(p["slope"]) * x
+    if kind == "beach":
+        # Wave-flume beach of the TELEMAC tests_channel case
+        # (Synolakis solitary-wave run-up): flat to the toe, then a
+        # plane 1:19.85 slope rising landward.
+        toe = float(p.get("toe", 14.68))
+        slope_inv = float(p.get("slope_inv", 19.85))
+        return np.maximum(x - toe, 0.0) / slope_inv
+    if kind == "vasque":
+        # Plane 0.01 slope with a Gaussian hump (TELEMAC vasque
+        # user_corfon.f; the manual prints (x-19)^2 but the Fortran
+        # samples I = 1..47 over 46 m, i.e. hump centre x = 18).
+        x0 = float(p.get("x0", 18.0))
+        return (-0.6 + 0.01 * x
+                + 0.1 * np.exp(-((x - x0) ** 2) / 20.0))
+    if kind == "bolzano":
+        # Tidal-flat channel of the TELEMAC balzano case
+        # (user_fortran/user_corfon.f).  Piecewise linear in x; the two
+        # middle branches overlap at x = 4800 exactly like the Fortran,
+        # where the later assignment (the reservoir crest segment) wins.
+        seg1 = -x / 2760.0
+        seg2 = x / 2760.0 - 60.0 / 23.0
+        seg3 = -x / 920.0 + 100.0 / 23.0
+        z = seg1.copy()
+        m2 = (x >= 3600.0) & (x <= 4800.0)
+        z[m2] = seg2[m2]
+        m3 = (x >= 4800.0) & (x <= 6000.0)
+        z[m3] = seg3[m3]
+        return z
     raise ValueError(f"unknown bathymetry type {kind!r}")
 
 
@@ -53,6 +81,16 @@ def build_initial(cfg: CaseConfig, mesh: TriMesh, zb: np.ndarray) -> np.ndarray:
     if kind == "lake_at_rest":
         zs = float(p["zs"])
         w[:, 0] = np.maximum(zs - zb, 0.0)
+    elif kind == "gaussian_hump":
+        # TELEMAC gouttedo (user_condin_h.f): h = h0 + amp*exp(-r^2/s2),
+        # at rest.  s2 = 4.0 (variance 2) in the manual case.
+        h0 = float(p["h0"])
+        amp = float(p["amp"])
+        s2 = float(p.get("s2", 4.0))
+        x0 = float(p.get("x0", 0.5 * (xc.max() + xc.min())))
+        y0 = float(p.get("y0", 0.5 * (yc.max() + yc.min())))
+        r2 = (xc - x0) ** 2 + (yc - y0) ** 2
+        w[:, 0] = h0 + amp * np.exp(-r2 / s2)
     elif kind == "dam_snap":
         hl = float(p["hl"])
         hr = float(p["hr"])
