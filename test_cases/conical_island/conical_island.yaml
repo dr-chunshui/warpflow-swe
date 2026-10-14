@@ -1,0 +1,56 @@
+# Solitary wave over a conical island (TELEMAC validation manual
+# ch. 16), Synolakis laboratory benchmark.  25 x 30 m flume, still
+# depth 0.32 m, conical island in the middle; incident solitary wave
+# H/h = 0.045 from the x = 25 m boundary (user_sl.f:
+# zs = h0 + H/cosh(K(c t - t0))^2, K = sqrt(0.75 H/h0^3),
+# c = sqrt(g (h0+H)), t0 = 10 s).  Chézy friction C = 100
+# (LAW OF BOTTOM FRICTION 2).  x = 0 boundary is a free outlet
+# (LIHBOR 5).
+#
+# Acceptance: final-state free surface vs the TELEMAC finite-volume
+# reference f2d_island.slf (node-wise L1/L2/Linf at t = 20 s).
+case:
+  name: conical_island
+  t_end: 20.0
+
+mesh:
+  type: selafin
+  file: geo_island.slf
+
+physics:
+  g: 9.81
+  chezy: 100.0
+
+initial:
+  type: lake_at_rest
+  params: {zs: 0.32}
+
+bathymetry:
+  type: selafin
+
+boundary:
+  groups:
+    - {name: wall_xmax_entry_walls, select: {chain: [1, 3]}, type: wall}
+    - {name: wave_inlet, select: {chain: 2}, type: level,
+       time: {soliton: {h0: 0.32, H: 0.0144, t0: 10.0}}}
+    - {name: outlet, select: {chain: 4}, type: outflow}
+
+numerics:
+  cfl: 0.8
+  order: 1
+  limiter: barth
+  time_order: 1
+  eps_dry: 1.0e-6
+
+output:
+  dir: output/conical_island
+  vtk_interval: 1.0
+  csv_interval: 0.05
+  monitors:
+    - {name: offsh, x: 20.0, y: 15.0}
+    - {name: toe,   x: 14.5, y: 15.0}
+    - {name: top,   x: 12.5, y: 15.0}
+    - {name: leeward, x: 8.0, y: 15.0}
+    - {name: shore, x: 2.0, y: 15.0}
+  observed:
+    telemac_ref: {file: f2d_island.slf, var: S, mode: final_field}

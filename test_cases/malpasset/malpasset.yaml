@@ -1,0 +1,71 @@
+# Malpasset dam break (TELEMAC validation manual ch. 31), small mesh.
+# Frejus (France) arch-dam failure, 2 Dec 1959: reservoir at level 100 m
+# NGF empties into the dry Reyran valley; closed domain (all boundaries
+# are walls, .cli chain 1).  Terrain from the SELAFIN FOND variable,
+# Strickler K = 30 (manual: LAW OF BOTTOM FRICTION 3, COEFFICIENT 30).
+# Initial condition from user_condin_h.f: h = 100 - zf on the positive
+# DISTAN side of the dam line (4701.183,4143.407)-(4655.553,4392.104),
+# forced dry in the circle (4500,5350) r=200 (behind-dam, outside the
+# reservoir), dry downstream.
+#
+# Acceptance (manual doc/malpasset.tex + LNHE 1964 physical model):
+# - wave-front travel times to the transformers: A->B = 1140 s,
+#   A->C = 1320 s (points A (5500,4400), B (11900,3250), C (13000,2700));
+# - peak water depths at gauges P6..P14 (upstream gauges deviate in ALL
+#   schemes and the manual attributes the offset to topography/physics,
+#   so the numeric line uses the floodplain gauges P10..P14).
+case:
+  name: malpasset
+  t_end: 4000.0
+
+mesh:
+  type: selafin
+  file: geo_malpasset-small.slf
+
+physics:
+  g: 9.81
+  strickler: 30.0
+
+initial:
+  type: reservoir_behind_line
+  params:
+    zs: 100.0
+    dam: [4701.183, 4143.407, 4655.553, 4392.104]
+    holes: [[4500.0, 5350.0, 200.0]]
+
+bathymetry:
+  type: selafin
+
+boundary:
+  groups:
+    - {name: wall, select: {chain: 1}, type: wall}
+
+numerics:
+  cfl: 0.9
+  order: 1
+  limiter: barth
+  time_order: 1
+  eps_dry: 1.0e-6
+
+output:
+  dir: output/malpasset
+  vtk_interval: 200.0
+  csv_interval: 5.0
+  observed:
+    max_depth:
+      - {name: P6,  x: 4947.0,  y: 4289.0, measured: 40.3}
+      - {name: P7,  x: 5717.0,  y: 4407.0, measured: 14.6}
+      - {name: P8,  x: 6775.0,  y: 3869.0, measured: 24.0}
+      - {name: P9,  x: 7128.0,  y: 3162.0, measured: 12.8}
+      - {name: P10, x: 8585.0,  y: 3443.0, measured: 11.8}
+      - {name: P11, x: 9674.0,  y: 3085.0, measured: 8.3}
+      - {name: P12, x: 10939.0, y: 3044.0, measured: 10.1}
+      - {name: P13, x: 11724.0, y: 2810.0, measured: 6.8}
+      - {name: P14, x: 12723.0, y: 2485.0, measured: 5.4}
+    arrival:
+      - {name: A, x: 5500.0,  y: 4400.0, threshold: 0.2}
+      - {name: B, x: 11900.0, y: 3250.0, threshold: 0.2}
+      - {name: C, x: 13000.0, y: 2700.0, threshold: 0.2}
+    arrival_diffs:
+      - {name: AB, a: A, b: B, measured: 1140.0}
+      - {name: AC, a: A, b: C, measured: 1320.0}

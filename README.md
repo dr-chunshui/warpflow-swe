@@ -71,6 +71,15 @@ analytic solution is configured, `compare.png` + `errors.csv`.
 | Vasque draw-down over a pool | 1 | L1(h) 4.8e-3 m; pool ponds at its spill level; partial drying |
 | Tests-channel solitary-wave run-up | 1 | R/d 0.106 (0.099 with Cf = 0.001) vs experiment 0.076 / TELEMAC FV 0.084 |
 | Gouttedo droplet, closed / open | 1 | mass 999.7833 vs 999.784 m3 (closed); outflow 31.2 vs 27.8 m3 (open) |
+| Malpasset dam break (ch. 31) | 1 | arrival A->B +0.9% / A->C -6.8% of measured; 9 gauges max depth (P8 +0.1%, P11 +7.6%) |
+| Conical-island soliton (ch. 16) | 1 | final-field L1 2.7e-3 m vs the TELEMAC FV reference (still depth 0.32 m) |
+| Triangular-shelf soliton (ch. 53) | 1 | final-field L1 1.7e-2 m (wave height 0.39 m) |
+| Monai-Valley tsunami (ch. 33) | 1 | final-field L1 4.1e-4 m (wave amplitude 0.016 m) |
+| Swash solution (ch. 47) | 1 | final-field L1 1.5e-3 m at the drained end state |
+| Digue breakwater overflow (ch. 21) | 1 | final-field L1 7.4e-2 m (time-mean; mass residual ~1e-8 m3) |
+| Culm flood recession (ch. 18) | 1 | final-field L1 0.347 m (PARTIAL: downstream backwater matches to -0.09 m; upper reach drains ~3x faster, note 24) |
+| Donau bridge reach (ch. 22) | 1 | final-field L1 0.287 m (PARTIAL: uniform +0.12..+0.25 m ponding at the cell-centred level boundary, notes 20/24) |
+| Wesel Rhine steady flow (ch. 58) | 1 | final-field L1 0.124 m (PARTIAL: constant log-law-equivalent K = 44; main channel +0.18 m ponding, volume +2.5%, note 18) |
 
 Closed-domain mass is conserved to machine precision (~1e-15 relative).
 

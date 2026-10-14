@@ -1,0 +1,54 @@
+# Solitary wave running up a triangular shelf (TELEMAC validation
+# manual ch. 53), ISEC 2009 workshop benchmark 1.  44.75 x 25.75 m
+# basin, still depth 0.78 m, triangular shelf in the middle (crest
+# 0.22 m above the still water line).  Incident solitary wave
+# H = 0.39 m (H/h = 0.5) enters at x = 44.75 m and runs towards
+# -x (user_sl.f: eta = WH/cosh(K(C t - T0))^2, WH = 0.39, WD = 0.78,
+# T0 = 2 s -- a pure uplift over zs = 0, hence soliton base: 0).
+# Chézy friction C = 180 (LAW OF BOTTOM FRICTION 2).  x = 0 boundary
+# is a free outlet (LIHBOR 5); top/bottom are walls.
+#
+# Acceptance: final-state free surface vs the TELEMAC finite-volume
+# reference f2d_triangular_shelf.slf (node-wise L1/L2/Linf at t = 20 s).
+case:
+  name: triangular_shelf
+  t_end: 20.0
+
+mesh:
+  type: selafin
+  file: geo_triangular_shelf.slf
+
+physics:
+  g: 9.81
+  chezy: 180.0
+
+initial:
+  type: lake_at_rest
+  params: {zs: 0.0}
+
+bathymetry:
+  type: selafin
+
+boundary:
+  groups:
+    - {name: walls, select: {chain: [1, 3]}, type: wall}
+    - {name: wave_inlet, select: {chain: 2}, type: level,
+       time: {soliton: {h0: 0.78, H: 0.39, t0: 2.0, base: 0.0}}}
+    - {name: outlet, select: {chain: 4}, type: outflow}
+
+numerics:
+  cfl: 0.8
+  order: 1
+  limiter: barth
+  time_order: 1
+  eps_dry: 1.0e-6
+
+output:
+  dir: output/triangular_shelf
+  vtk_interval: 1.0
+  csv_interval: 0.05
+  monitors:
+    - {name: x25_y0,  x: 25.0, y: 0.0}
+    - {name: x25_ym5, x: 25.0, y: -5.0}
+  observed:
+    telemac_ref: {file: f2d_triangular_shelf.slf, var: S, mode: final_field}

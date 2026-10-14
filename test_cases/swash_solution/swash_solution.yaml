@@ -1,0 +1,57 @@
+# Analytic swash benchmark (TELEMAC validation manual ch. 47).
+# 8 x 0.5 m flume on a plane beach zb = x/20 - 0.3.  Initial condition
+# (user_condin_h.f): h = x/20 + 0.05/cos(arctan(0.05)) for x <= 6 m,
+# dry beyond -- a tilted free surface zs = x/10 - 0.2499375, out of
+# balance with the bed, that runs up the dry beach (towards -x) and
+# then drains; the x = 0 boundary is LIHBOR 5, which in the TELEMAC
+# finite-volume kernel (cdl_fv.f) still receives the PRESCRIBED
+# ELEVATIONS value -- modelled here as a level boundary held at the
+# initial shoreline elevation -0.2499375 m (an infinite drain at the
+# still-water line; outflow leaves 0.3 m^3 sloshing and misses the
+# reference).  No bottom friction (LAW OF BOTTOM FRICTION 0).
+#
+# Acceptance: final-state free surface vs the TELEMAC finite-volume
+# reference f2d_swash.slf (node-wise L1/L2/Linf at t = 12 s, when the
+# domain is nearly drained -- a strict wetting/drying test).
+case:
+  name: swash_solution
+  t_end: 12.0
+
+mesh:
+  type: selafin
+  file: geo_swash.slf
+
+physics:
+  g: 9.81
+
+initial:
+  type: ramp_cutoff
+  params: {slope: 0.05, intercept: 0.0500625, x_cut: 6.0}
+
+bathymetry:
+  type: selafin
+
+boundary:
+  groups:
+    - {name: walls, select: {chain: 1}, type: wall}
+    - {name: sea, select: {chain: 2}, type: level, value: -0.2499375}
+
+numerics:
+  cfl: 0.8
+  order: 1
+  limiter: barth
+  time_order: 1
+  eps_dry: 1.0e-6
+
+output:
+  dir: output/swash_solution
+  vtk_interval: 1.0
+  csv_interval: 0.05
+  monitors:
+    - {name: x1, x: 1.0, y: 0.25}
+    - {name: x2, x: 2.0, y: 0.25}
+    - {name: x3, x: 3.0, y: 0.25}
+    - {name: x4, x: 4.0, y: 0.25}
+    - {name: x5, x: 5.0, y: 0.25}
+  observed:
+    telemac_ref: {file: f2d_swash.slf, var: S, mode: final_field}

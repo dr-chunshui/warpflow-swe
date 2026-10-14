@@ -1,0 +1,60 @@
+# Flow over a breakwater (TELEMAC validation manual ch. 21, digue).
+# 1,232.5 x 1,000 m basin, V-shaped (45 deg) trapezoidal breakwater
+# with crest at z = 9 m across the domain (x in [206, 564]); two pools
+# downstream (east).  Initial surface zs = 5 m (user_condin_h.f:
+# h = 5 - zf where zf <= 5).  Liquid boundaries from PRESCRIBED
+# FLOWRATES 0.; 100.: the 100 m3/s inflow is at the UPSTREAM basin
+# west of the breakwater -- chain 2 (x = 0, 16 nodes) -- the reference
+# end state piles the upstream pool up to the crest (S ~ 9.3) while
+# the downstream side stays near 5, so chain 4 (x = 1232.5) takes
+# Q = 0; walls elsewhere (chains 1/3/5).  Strickler K = 55.
+#
+# Acceptance (manual): no measured data -- the reference shows the
+# steady overflow regime: supercritical run-down on the breakwater
+# faces, hydraulic jumps, subcritical pools.  Numeric checks: mass
+# balance, final-field comparison vs f2d_digue.slf (t = 14000), and a
+# quasi-steady end state (time-averaged surface).
+case:
+  name: digue
+  t_end: 14000.0
+
+mesh:
+  type: selafin
+  file: geo_digue.slf
+
+physics:
+  g: 9.81
+  strickler: 55.0
+
+initial:
+  type: lake_at_rest
+  params: {zs: 5.0}
+
+bathymetry:
+  type: selafin
+
+boundary:
+  groups:
+    - {name: walls,  select: {chain: [1, 3, 5]}, type: wall}
+    - {name: inlet,  select: {chain: 2}, type: inflow_q, value: 100.0}
+    - {name: q0,     select: {chain: 4}, type: inflow_q, value: 0.0}
+
+numerics:
+  cfl: 0.9
+  order: 1
+  limiter: barth
+  time_order: 1
+  eps_dry: 1.0e-6
+
+output:
+  dir: output/digue
+  vtk_interval: 1000.0
+  csv_interval: 20.0
+  average_window: 2000.0
+  observed:
+    telemac_ref: {file: f2d_digue.slf, var: S, mode: final_field}
+  monitors:
+    - {name: pool,  x: 150.0, y: 0.0}
+    - {name: crest, x: 380.0, y: 0.0}
+    - {name: right1, x: 700.0, y: 0.0}
+    - {name: right2, x: 1100.0, y: 0.0}

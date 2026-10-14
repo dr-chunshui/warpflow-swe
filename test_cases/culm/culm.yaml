@@ -1,0 +1,61 @@
+# Transient flood flow in the valley of river Culm, UK (TELEMAC
+# validation manual ch. 18).  11 km meandering reach, main channel
+# ~19 m wide on an 18-258 m mesh; the flood is driven by time series:
+# upstream inflow Q(t) 28.7 -> 65.8 (peak t = 18000 s) -> 17.4 m3/s and
+# downstream level 23.80 -> 24.29 m, both from TELEMAC's liquid
+# boundary file t2d_culm.qsl (converted to the two-column tables
+# qsl_q.txt / qsl_sl.txt).  Hot start from the TELEMAC
+# previous-computation file ini_culm.slf (COMPUTATION CONTINUED);
+# chain 1 (LIHBOR 4, upstream) carries Q(t), chain 3 (LIHBOR 5 --
+# but TELEMAC feeds PRESCRIBED ELEVATIONS into it, cdl_fv.f HBOR
+# branch) carries the downstream level series.  Strickler K = 30
+# (LAW OF BOTTOM FRICTION 3).  TELEMAC runs 27000 steps x 2 s to
+# t = 54000 s (flood recession limb); the FV reference f2d_culm.slf
+# stores only that final state.
+#
+# Acceptance: final-state free surface vs f2d_culm.slf (node-wise
+# L1/L2/Linf at t = 54000 s).
+case:
+  name: culm
+  t_end: 54000.0
+
+mesh:
+  type: selafin
+  file: geo_culm.slf
+
+physics:
+  g: 9.81
+  strickler: 30.0
+
+initial:
+  type: selafin_state
+  params: {file: ini_culm.slf, frame: 0}
+
+bathymetry:
+  type: selafin
+
+boundary:
+  groups:
+    - {name: inflow, select: {chain: 1}, type: inflow_q, value: 28.32,
+       time: {series: qsl_q.txt}}
+    - {name: outlet, select: {chain: 3}, type: level,
+       value: 23.77, time: {series: qsl_sl.txt}}
+    - {name: walls, select: {chain: [2, 4, 5]}, type: wall}
+
+numerics:
+  cfl: 0.8
+  order: 1
+  limiter: barth
+  time_order: 1
+  eps_dry: 1.0e-6
+
+output:
+  dir: output/culm
+  vtk_interval: 5000.0
+  csv_interval: 100.0
+  monitors:
+    - {name: upstream, x: 400.0, y: 300.0}
+    - {name: mid,      x: 3500.0, y: 3300.0}
+    - {name: downstream, x: 7000.0, y: 6500.0}
+  observed:
+    telemac_ref: {file: f2d_culm.slf, var: S, mode: final_field}

@@ -1,0 +1,61 @@
+# Rhine river Wesel-Xanten reach, km 812.5-821.5 (TELEMAC validation
+# manual ch. 58), steady flow on an UnTRIM survey mesh.  Initial
+# free surface from 93 surveyed cross-sections (fo1_wesel.txt,
+# SURFINI: nearest-section level, 13.12 m at km 812.5 falling to
+# 11.83 m at km 821.5).  Upstream inflow Q = 1061 m3/s at chain 2
+# (LIHBOR 4 + PRESCRIBED FLOWRATES, first NUMLIQ), downstream level
+# 11.82 m at chain 4 (PRESCRIBED ELEVATIONS, second NUMLIQ).
+# Uniform Nikuradse ks = 0.035 m (LAW OF BOTTOM FRICTION 5).
+# friction_calc.f CASE(5) is the fully-rough LOG LAW of the wall,
+# CF = 2/(ln(11.036 h/ks)/kappa)^2 -- equivalent Chezy C = 44-45 over
+# the reach depth range, i.e. Strickler K ~ 44, NOT the Griffith scale
+# form K = 21.1/ks^(1/6) = 36.9 (that form is ~19% too rough here and
+# ponded the steady profile +0.46 m in the channel).
+# K = 44.0.  TELEMAC runs 360 steps x 120 s to t = 43200 s
+# for steady state; the constant 2 m2/s turbulent viscosity of the
+# reference is not modelled.  The FV reference f2d_wesel.slf stores
+# only the final steady state.
+#
+# Acceptance: free surface vs f2d_wesel.slf (node-wise L1/L2/Linf).
+case:
+  name: wesel
+  t_end: 43200.0
+
+mesh:
+  type: selafin
+  file: geo_wesel.slf
+
+physics:
+  g: 9.81
+  strickler: 44.0
+
+initial:
+  type: level_profile
+  params: {file: fo1_wesel.txt}
+
+bathymetry:
+  type: selafin
+
+boundary:
+  groups:
+    - {name: inflow, select: {chain: 2}, type: inflow_q, value: 1061.0}
+    - {name: outlet, select: {chain: 4}, type: level, value: 11.82}
+    - {name: walls, select: {chain: rest}, type: wall}
+
+numerics:
+  cfl: 0.8
+  order: 1
+  limiter: barth
+  time_order: 1
+  eps_dry: 1.0e-6
+
+output:
+  dir: output/wesel
+  vtk_interval: 6000.0
+  csv_interval: 200.0
+  monitors:
+    - {name: upstream,   x: 6500.0, y: 500.0}
+    - {name: mid,        x: 3600.0, y: 2700.0}
+    - {name: downstream, x: 400.0,  y: 3300.0}
+  observed:
+    telemac_ref: {file: f2d_wesel.slf, var: S, mode: final_field}

@@ -64,8 +64,53 @@ def bathymetry_at(cfg: CaseConfig, x: np.ndarray, y: np.ndarray) -> np.ndarray:
     raise ValueError(f"unknown bathymetry type {kind!r}")
 
 
+def edge_bed(cfg: CaseConfig, mesh: TriMesh, edges: np.ndarray) -> np.ndarray:
+    """Bed elevation on boundary edges [m], in the solver's bed datum,
+    for the bord.f level ghost depth max(0, Z - ZF(boundary node)).
+
+    The datum must match build_bathymetry, not the raw mesh: donau
+    meshes with geo_donau.slf (raw bottom 0-10 m) while the solver bed
+    comes from the f2d reference via selafin_ref (307-308 m) -- taking
+    the mesh bottom there puts the ghost 307 m too deep and the level
+    boundary pours a 300 m water column into the domain.
+    """
+    kind = cfg.bathymetry.type
+    if kind == "selafin":
+        # P1 terrain carried by the mesh: the linear interpolant's value
+        # at an edge midpoint equals the mean of the two end-node beds
+        # exactly.
+        return mesh.bottom[mesh.edges[edges]].mean(axis=1)
+    if kind == "selafin_ref":
+        from .mesh import read_selafin_series, nearest_index
+        data = read_selafin_series(
+            str(cfg.bathymetry.params["file"]), ["B"])
+        zn = data["series"]["B"][int(cfg.bathymetry.params.get("frame", 0))]
+        mid = mesh.nodes[mesh.edges[edges]].mean(axis=1)
+        return zn[nearest_index(mid, data["nodes"])]
+    mid = mesh.nodes[mesh.edges[edges]].mean(axis=1)
+    return bathymetry_at(cfg, mid[:, 0], mid[:, 1])
+
+
 def build_bathymetry(cfg: CaseConfig, mesh: TriMesh) -> np.ndarray:
     """Bottom elevation zb at cell centroids [m]."""
+    if cfg.bathymetry.type == "selafin":
+        # terrain carried by the mesh: P1 node bottom averaged at the
+        # centroid (exact for the linear P1 interpolant)
+        if mesh.bottom is None:
+            raise ValueError(
+                f"{cfg.name}: bathymetry selafin but the mesh carries no "
+                f"FOND/BOTTOM variable")
+        return mesh.bottom[mesh.tris].mean(axis=1)
+    if cfg.bathymetry.type == "selafin_ref":
+        # terrain from the BOTTOM variable of a reference result file
+        # (donau: the shipped geo_*.slf and the f2d reference carry
+        # different vertical datums -- the run that produced the
+        # reference defines the truth)
+        from .mesh import read_selafin_series, nearest_index
+        data = read_selafin_series(
+            str(cfg.bathymetry.params["file"]), ["B"])
+        zn = data["series"]["B"][int(cfg.bathymetry.params.get("frame", 0))]
+        return zn[nearest_index(mesh.cell_centroids, data["nodes"])]
     c = mesh.cell_centroids
     return bathymetry_at(cfg, c[:, 0], c[:, 1])
 
@@ -148,6 +193,99 @@ def build_initial(cfg: CaseConfig, mesh: TriMesh, zb: np.ndarray) -> np.ndarray:
         zs = h0 * (np.sqrt(1.0 - b * b) / (1.0 - b) - 1.0
                    - (r2 / (a * a)) * ((1.0 - b * b) / (1.0 - b) ** 2 - 1.0))
         w[:, 0] = np.maximum(zs - zb, 0.0)
+    elif kind == "reservoir_behind_line":
+        # Reservoir impounded on one side of a straight dam line
+        # (malpasset user_condin_h.f): h = max(zs - zb, 0) where the
+        # signed distance to the line (distan.f convention, positive on
+        # the side the normal (y1-y2, x2-x1) points to) exceeds 0.001;
+        # circular holes force h = 0 (zones behind the dam outside the
+        # reservoir).
+        x1, y1, x2, y2 = (float(v) for v in p["dam"])
+        zs = float(p["zs"])
+        a1, b1 = y1 - y2, x2 - x1
+        c1 = x1 * y2 - x2 * y1
+        dist = (a1 * xc + b1 * yc + c1) / np.hypot(a1, b1)
+        w[:, 0] = np.where(dist > 0.001, np.maximum(zs - zb, 0.0), 0.0)
+        for hole in p.get("holes", []):
+            hcx, hcy, hr = (float(v) for v in hole)
+            w[:, 0][(xc - hcx) ** 2 + (yc - hcy) ** 2 < hr * hr] = 0.0
+    elif kind == "ramp_cutoff":
+        # Linear-in-x depth with a dry truncation at x = x_cut
+        # (swash_solution user_condin_h.f): h = intercept + slope*x for
+        # x <= x_cut, dry beyond.  Combined with a linear bottom this
+        # sets up an unbalanced tilted free surface that runs up the
+        # beach (the analytic swash benchmark).
+        slope = float(p["slope"])
+        intercept = float(p["intercept"])
+        x_cut = float(p["x_cut"])
+        w[:, 0] = np.where(xc <= x_cut, intercept + slope * xc, 0.0)
+        np.maximum(w[:, 0], 0.0, out=w[:, 0])
+    elif kind == "selafin_state":
+        # Hot start from a TELEMAC result file (COMPUTATION CONTINUED,
+        # PREVIOUS COMPUTATION FILE).  The stored S/H/U/V are consistent
+        # with the *reference mesh bathymetry*, so rebuilding the depth
+        # as S - zb(our cell) is wrong wherever the surface meets steep
+        # banks: the nearest node may sit on a high floodplain whose S
+        # then floods a channel cell (culm gained 170,000 m3 that way).
+        # P1-interpolate TELEMAC's own depth field H instead; fall back
+        # to the nearest-node S - zb rebuild only when the file has no
+        # WATER DEPTH variable.
+        from .mesh import read_selafin_series, nearest_index
+        from .compare_telemac import p1_sample
+        try:
+            data = read_selafin_series(str(p["file"]), ["S", "U", "V", "H"])
+        except ValueError:  # no WATER DEPTH variable in this file
+            data = read_selafin_series(str(p["file"]), ["S", "U", "V"])
+        frame = int(p.get("frame", 0))
+        nodes = data["nodes"]
+        tris = np.asarray(data["tris"])
+        cc = mesh.cell_centroids[:, :2]
+        if data["series"].get("H") is not None:
+            h = p1_sample(nodes[:, :2], tris, data["series"]["H"][frame], cc)
+            u = p1_sample(nodes[:, :2], tris, data["series"]["U"][frame], cc)
+            v = p1_sample(nodes[:, :2], tris, data["series"]["V"][frame], cc)
+        else:
+            zs = data["series"]["S"][frame]
+            j = nearest_index(mesh.cell_centroids, nodes)
+            h = np.maximum(zs[j] - zb, 0.0)
+            u = data["series"]["U"][frame][j]
+            v = data["series"]["V"][frame][j]
+        w[:, 0] = np.maximum(h, 0.0)
+        w[:, 1] = w[:, 0] * u
+        w[:, 2] = w[:, 0] * v
+    elif kind == "level_profile":
+        # Cross-section free-surface initialisation (wesel SURFINI /
+        # fo1_wesel.txt): each row carries a surveyed section
+        # [xleft, yleft, xright, yright, water_level]; every cell takes
+        # the level of the nearest section (constant across it).
+        secs = []
+        with open(str(p["file"]), "r", encoding="utf-8",
+                  errors="replace") as f:
+            for line in f:
+                parts = line.replace(",", " ").split()
+                if len(parts) < 5:
+                    continue
+                try:
+                    secs.append([float(v) for v in parts[:5]])
+                except ValueError:
+                    continue
+        secs = np.asarray(secs, dtype=np.float64)
+        px, py, qx, qy = secs[:, 0], secs[:, 1], secs[:, 2], secs[:, 3]
+        pz = secs[:, 4]
+        dqx, dqy = qx - px, qy - py
+        L2 = np.maximum(dqx * dqx + dqy * dqy, 1.0e-30)
+        best = np.full(len(xc), np.inf)
+        zs0 = np.zeros(len(xc))
+        for i in range(len(secs)):
+            t = np.clip(((xc - px[i]) * dqx[i]
+                         + (yc - py[i]) * dqy[i]) / L2[i], 0.0, 1.0)
+            d2 = ((xc - (px[i] + t * dqx[i])) ** 2
+                  + (yc - (py[i] + t * dqy[i])) ** 2)
+            m = d2 < best
+            if m.any():
+                best[m] = d2[m]
+                zs0[m] = pz[i]
+        w[:, 0] = np.maximum(zs0 - zb, 0.0)
     else:
         raise ValueError(f"unknown initial type {kind!r}")
 

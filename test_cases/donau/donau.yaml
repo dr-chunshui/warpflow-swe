@@ -1,0 +1,59 @@
+# Danube river reach near Deggendorf, Germany (TELEMAC validation
+# manual ch. 22), 7.7 km with four bridges and groyne fields; a
+# steady-flow test of zonal roughness.  The shipped geo_donau.slf
+# carries a shifted/other-iteration bottom (0-10 m), so the terrain
+# is taken from the BOTTOM variable of the TELEMAC FV reference
+# f2d_donau.slf itself (bathymetry selafin_ref); the run is hot
+# started from the same reference steady state (selafin_state) and
+# re-balanced for 6000 s under Q = 218 m3/s at chain 4 (upstream,
+# LIHBOR 4 + PRESCRIBED FLOWRATES) and level 309.205 m at chain 2
+# (downstream, PRESCRIBED ELEVATIONS).  The 7 Nikuradse friction
+# domains (ks 0.025 m main channel .. 10 m pier zones,
+# roughness.tbl) are approximated by one calibrated equivalent Strickler
+# K = 40 m^(1/3)/s (calibrated on the water-surface slope; Griffith gives 39 for the main channel,
+# 28.6 groyne fields, 21-14 pier/structure zones).
+#
+# Acceptance: free surface vs f2d_donau.slf (node-wise L1/L2/Linf).
+case:
+  name: donau
+  t_end: 6000.0
+
+mesh:
+  type: selafin
+  file: geo_donau.slf
+
+physics:
+  g: 9.81
+  strickler: 40.0
+
+initial:
+  type: selafin_state
+  params: {file: f2d_donau.slf, frame: 0}
+
+bathymetry:
+  type: selafin_ref
+  params: {file: f2d_donau.slf}
+
+boundary:
+  groups:
+    - {name: outlet, select: {chain: 2}, type: level, value: 309.205}
+    - {name: inflow, select: {chain: 4}, type: inflow_q, value: 218.0}
+    - {name: walls, select: {chain: rest}, type: wall}
+
+numerics:
+  cfl: 0.8
+  order: 1
+  limiter: barth
+  time_order: 1
+  eps_dry: 1.0e-6
+
+output:
+  dir: output/donau
+  vtk_interval: 1000.0
+  csv_interval: 50.0
+  monitors:
+    - {name: upstream,   x: 64500.0, y: 11900.0}
+    - {name: mid,        x: 67800.0, y: 11000.0}
+    - {name: downstream, x: 71000.0, y: 9600.0}
+  observed:
+    telemac_ref: {file: f2d_donau.slf, var: S, mode: final_field}

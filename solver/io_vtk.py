@@ -13,7 +13,9 @@ def _b64(data: np.ndarray) -> str:
 
 def _cell_block(tris: np.ndarray) -> tuple[str, str]:
     n = len(tris)
-    conn = np.concatenate([np.full((n, 1), 3, dtype=np.int32), tris], axis=1).ravel()
+    # VTK UnstructuredGrid connectivity is a plain concatenation of the
+    # per-cell node indices (no leading count); offsets delimit cells.
+    conn = tris.ravel()
     offsets = np.arange(1, n + 1, dtype=np.int32) * 3
     return _b64(conn), _b64(offsets)
 

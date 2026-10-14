@@ -173,8 +173,11 @@ def hllc_flux(
 
 # ---------------------------------------------------------------------------
 # Boundary ghost state (mirrors cdl_fv.f).  Inputs: interior CELL-AVERAGE
-# state (boundary edges stay first order, like the Fortran), cell bottom,
-# bc type and per-edge parameter; outputs the ghost (h, u, v).
+# state (boundary edges stay first order, like the Fortran), the cell bed
+# and the bed of the boundary NODES (bord.f: HBOR = max(0, Z - ZF(node))
+# is a depth over the node bed; on steep valley banks the difference to
+# the cell bed decides wet vs dry ghost), bc type and per-edge parameter;
+# outputs the ghost (h, u, v).
 # ---------------------------------------------------------------------------
 @wp.func
 def ghost_state(
@@ -183,7 +186,7 @@ def ghost_state(
     ha: wp.float64,
     ua: wp.float64,
     va: wp.float64,
-    zba: wp.float64,
+    zbnd: wp.float64,
     nx: wp.float64,
     ny: wp.float64,
 ):
@@ -207,25 +210,43 @@ def ghost_state(
         vg = ny * un + nx * vt
         hg = ha
     elif bct == BC_OUTFLOW:
-        # Zero gradient.
-        pass
+        # Free outflow (TELEMAC LIHBOR 5): zero gradient while the flow
+        # leaves, but the ghost normal velocity is clamped at 0 so the
+        # boundary never feeds the domain back -- the kinetic scheme's
+        # free-outflow boundary has no incoming distribution function,
+        # and without the clamp a receding wave (swash drain-down)
+        # turns the edge into a free inlet that keeps the basin sloshing.
+        un = nx * ua + ny * va
+        if un < wp.float64(0.0):
+            vt = -ny * ua + nx * va
+            ug = -ny * vt
+            vg = nx * vt
     elif bct == BC_LEVEL:
-        # Prescribed free-surface elevation (bord.f: hg = max(0, zs-zb)).
+        # Prescribed free-surface elevation (bord.f: HBOR is the DEPTH
+        # max(0, Z - ZF(boundary node)); here zbnd is that node bed).
         zs = bparam
-        hg = wp.max(zs - zba, wp.float64(0.0))
+        hg = wp.max(zs - zbnd, wp.float64(0.0))
         un = nx * ua + ny * va
         vt = -ny * ua + nx * va
-        c1 = wp.sqrt(G * ha)
-        cg = wp.sqrt(G * hg)
-        regime = (un + c1) * (un - c1)
+        # cdl_fv.f assesses the regime and its subcritical ghost with
+        # C1 = sqrt(g*H1), where H1 is the boundary NODE depth -- which
+        # TELEMAC re-imposes to HBOR every step, so C1 == CG and the
+        # characteristic correction ugn = un + 2*(C1-CG) collapses to
+        # ugn = un.  Evaluating c1 from the CELL depth instead (any bed
+        # offset between cell centre and boundary nodes) re-inflates that
+        # term into a runaway pump: donau grew a 48 m tower on its level
+        # chain within one output frame, culm bled its flood peak through
+        # the outlet.  Keep the TELEMAC-effective ghost: prescribed
+        # depth, interior velocity.
+        cg = wp.sqrt(G * wp.max(hg, eps))
+        regime = (un + cg) * (un - cg)
         if hg <= eps:
             ug = wp.float64(0.0)
             vg = wp.float64(0.0)
         elif regime < wp.float64(0.0):
-            # subcritical: conserve the second Riemann invariant
-            ugn = un + wp.float64(2.0) * (c1 - cg)
-            ug = nx * ugn - ny * vt
-            vg = ny * ugn + nx * vt
+            # subcritical: interior velocity, prescribed depth
+            ug = nx * un - ny * vt
+            vg = ny * un + nx * vt
         elif un <= wp.float64(0.0):
             # supercritical inflow with missing data: lake at rest
             ug = wp.float64(0.0)
@@ -242,7 +263,7 @@ def ghost_state(
             # reservoir the level boundary declares: keep the prescribed
             # depth, zero velocity -- the resulting step drives the
             # hydraulic jump that re-anchors the flow at the level.
-            hg = wp.max(zs - zba, wp.float64(0.0))
+            hg = wp.max(zs - zbnd, wp.float64(0.0))
             ug = wp.float64(0.0)
             vg = wp.float64(0.0)
     else:  # BC_INFLOW_Q
@@ -255,22 +276,49 @@ def ghost_state(
         vt = -ny * ua + nx * va
         c1 = wp.sqrt(G * ha)
         regime = (un + c1) * (un - c1)
+        # Critical-depth inflow state for dried-out/shallow edges: the
+        # ghost depth that carries the prescribed unit discharge at
+        # Froude 1.  cdl_fv.f routes a dry discharge boundary into its
+        # supercritical-inflow branch with HG = HBOR (a water-filled
+        # ghost), so its inlets keep feeding and re-wet; without this
+        # the guard below clamps hg to ~0 once the edge cell dries and
+        # the inlet dead-locks (culm: the outlet pulled the upstream
+        # reach dry within 500 s and the flood wave never entered).
+        qa = wp.abs(q)
+        hc = wp.pow(qa * qa / G, wp.float64(1.0 / 3.0))
         if regime < wp.float64(0.0):
             # subcritical: ghost normal velocity from the current interior
             # depth; depth from conservation of the second Riemann invariant
             ugn = q / wp.max(ha, eps)
+            # Dry/shallow inflow guard.  The invariant-consistent ghost
+            # depth scales like ugn^2/(4g), so a prescribed discharge over
+            # a nearly dry cell produces an astronomic ghost depth that
+            # floods the whole domain (digue ch.21: ha = 0.004 m at the
+            # inflow edge -> ugn = -27.7 m/s -> hg = 20 m).  TELEMAC only
+            # escapes because a strictly dry cell gives REGIME = 0 and
+            # lands in its supercritical-inflow branch (cdl_fv.f).  Cap
+            # the inflow speed at twice the interior celerity (critical-
+            # type inflow control): hg <= 4 ha, the edge feeds at a
+            # reduced rate, and the boundary self-heals -- ugn = q/ha
+            # resumes once the cell has wetted up.
+            ugn = wp.max(ugn, un - wp.float64(2.0) * c1)
             hgt = un + wp.float64(2.0) * c1 - ugn
             hg = hgt * hgt / (wp.float64(4.0) * G)
             if hg <= eps:
-                ug = wp.float64(0.0)
-                vg = wp.float64(0.0)
+                # dried-out inlet: re-wetting ghost at the critical depth
+                hg = hc
+                ugn = -wp.sqrt(G * hc)
+                ug = nx * ugn - ny * vt
+                vg = ny * ugn + nx * vt
             else:
                 ug = nx * ugn - ny * vt
                 vg = ny * ugn + nx * vt
         elif un <= wp.float64(0.0):
-            # supercritical inflow without imposed depth: use interior depth
-            hg = ha
-            ugn = q / wp.max(ha, eps)
+            # supercritical inflow without imposed depth: feed at the
+            # critical state of the prescribed discharge (interior depth
+            # would vanish together with the cell it mirrors)
+            hg = wp.max(ha, hc)
+            ugn = -wp.sqrt(G * hg)
             ug = nx * ugn - ny * vt
             vg = ny * ugn + nx * vt
         else:
@@ -520,6 +568,7 @@ def k_flux(
     bedge_group: wp.array(dtype=wp.int32),
     btype: wp.array(dtype=wp.int32),
     bparam: wp.array(dtype=wp.float64),  # per-edge: zs or q_edge [m^2/s]
+    bzb: wp.array(dtype=wp.float64),  # per-edge: boundary-node bed (bord.f)
     rhs: wp.array(dtype=wp.vec3d),
     bflux: wp.array(dtype=wp.float64),
     order: wp.int32,
@@ -536,7 +585,7 @@ def k_flux(
         # -------- boundary edge: cell-average state + ghost (cdl_fv.f) --
         ha, ua, va = primitive(w[a][0], w[a][1], w[a][2])
         grp = bedge_group[e]
-        hg, ug, vg = ghost_state(btype[grp], bparam[e], ha, ua, va, zb[a], nx, ny)
+        hg, ug, vg = ghost_state(btype[grp], bparam[e], ha, ua, va, bzb[e], nx, ny)
         f0, f1, f2 = hllc_flux(ha, hg, ua, va, ug, vg, nx, ny)
         wp.atomic_add(rhs, a, wp.vec3d(-le * f0, -le * f1, -le * f2))
         wp.atomic_add(bflux, grp, le * f0)
@@ -687,6 +736,7 @@ def k_friction(
     w: wp.array(dtype=wp.vec3d),
     strickler: wp.array(dtype=wp.float64),
     dt: wp.float64,
+    is_chezy: wp.int32,
 ):
     c = wp.tid()
     kf = strickler[c]
@@ -698,7 +748,10 @@ def k_friction(
     hu = w[c][1]
     hv = w[c][2]
     spd = wp.sqrt(hu * hu + hv * hv) / h
-    alpha = G * spd / (kf * kf * h * wp.cbrt(h))  # g|u| / (K^2 h^(4/3))
+    if is_chezy != 0:
+        alpha = G * spd / (kf * kf * h)  # Chezy: g|u| / (C^2 h)
+    else:
+        alpha = G * spd / (kf * kf * h * wp.cbrt(h))  # Strickler: g|u| / (K^2 h^(4/3))
     w[c] = wp.vec3d(h, hu / (wp.float64(1.0) + dt * alpha),
                     hv / (wp.float64(1.0) + dt * alpha))
 

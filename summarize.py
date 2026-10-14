@@ -14,15 +14,26 @@ def main() -> int:
     rows = []
     for case_dir in sorted(p for p in root.iterdir() if p.is_dir()):
         err_csv = case_dir / "errors.csv"
-        if not err_csv.exists():
-            continue
-        with err_csv.open() as fh:
-            data = {}
-            for k, v in csv.DictReader(fh).__next__().items():
-                try:
-                    data[k] = float(v)
-                except (TypeError, ValueError):
-                    pass
+        data = {}
+        if err_csv.exists():
+            with err_csv.open() as fh:
+                for k, v in csv.DictReader(fh).__next__().items():
+                    try:
+                        data[k] = float(v)
+                    except (TypeError, ValueError):
+                        pass
+        else:
+            # TELEMAC reference cases: final-field L1/L2/Linf live in
+            # telemac_final_field.csv (metric,value rows) instead.
+            tel_csv = case_dir / "telemac_final_field.csv"
+            if not tel_csv.exists():
+                continue
+            with tel_csv.open() as fh:
+                data = {r["metric"]: float(r["value"])
+                        for r in csv.DictReader(fh)
+                        if r.get("metric") in ("l1", "l2", "linf")}
+            data["l1_h"] = data.get("l1", "")
+            data["l2_h"] = data.get("l2", "")
         hist = case_dir / "history.csv"
         t_end = mass_end = ""
         if hist.exists():

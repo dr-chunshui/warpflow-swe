@@ -1,0 +1,55 @@
+# Monai Valley tsunami experiment (TELEMAC validation manual
+# ch. 33), Synolakis coastal-village benchmark.  5.5 x 3.4 m basin,
+# still water zs = 0 (depth 0.135 m in the valley), village blocks
+# (bathymetry raised to +0.125 m) in the upper-right corner
+# x in [4.85, 5.5], y in [1.45, 3.4].  Incident long wave driven by
+# the measured gauge record initial_wave.prn (peak eta = 0.0162 m at
+# t ~ 12.4 s) at the x = 0 boundary (LIHBOR 5, LIQUID BOUNDARIES
+# FILE); all other sides are walls.  Chézy friction C = 180
+# (LAW OF BOTTOM FRICTION 2).
+#
+# Acceptance: final-state free surface vs the TELEMAC finite-volume
+# reference f2d_monai.slf (node-wise L1/L2/Linf at t = 22.5 s).
+case:
+  name: monai_valley
+  t_end: 22.5
+
+mesh:
+  type: selafin
+  file: geo_monai.slf
+
+physics:
+  g: 9.81
+  chezy: 180.0
+
+initial:
+  type: lake_at_rest
+  params: {zs: 0.0}
+
+bathymetry:
+  type: selafin
+
+boundary:
+  groups:
+    - {name: walls, select: {chain: 1}, type: wall}
+    - {name: wave_inlet, select: {chain: 2}, type: level,
+       time: {series: initial_wave.prn}}
+
+numerics:
+  cfl: 0.9
+  order: 1
+  limiter: barth
+  time_order: 1
+  eps_dry: 1.0e-6
+
+output:
+  dir: output/monai_valley
+  vtk_interval: 1.0
+  csv_interval: 0.05
+  monitors:
+    - {name: inlet,  x: 0.5,  y: 1.7}
+    - {name: mid,    x: 2.75, y: 1.7}
+    - {name: fore,   x: 4.5,  y: 2.4}
+    - {name: inside, x: 5.2,  y: 2.4}
+  observed:
+    telemac_ref: {file: f2d_monai.slf, var: S, mode: final_field}

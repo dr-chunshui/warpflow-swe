@@ -22,8 +22,8 @@ def main() -> int:
                          cfg.mesh.ymin, cfg.mesh.ymax,
                          cfg.mesh.dx, cfg.mesh.diagonal)
     else:
-        nodes, tris, _ = read_selafin(cfg.mesh.file)
-        mesh = build_topology(nodes, tris)
+        nodes, tris, bottom = read_selafin(cfg.mesh.file)
+        mesh = build_topology(nodes, tris, bottom)
 
     print(f"case {cfg.name}: {mesh.n_cells} cells, {mesh.n_edges} edges, "
           f"{mesh.n_bedges} boundary edges, t_end = {cfg.t_end} s")
@@ -36,6 +36,17 @@ def main() -> int:
         else:
             from solver.analysis import compare_case
             compare_case(cfg, mesh, solver)
+    if cfg.output.observed:
+        from solver.compare_obs import compare_observed
+        compare_observed(cfg, cfg.output.dir)
+    if "telemac_ref" in cfg.output.observed:
+        ref_cfg = cfg.output.observed["telemac_ref"]
+        if str(ref_cfg.get("mode", "gauges")) == "final_field":
+            from solver.compare_telemac import compare_final_field
+            compare_final_field(cfg, mesh, solver, ref_cfg)
+        else:
+            from solver.compare_telemac import compare_telemac
+            compare_telemac(cfg, cfg.output.dir)
     return 0
 
 

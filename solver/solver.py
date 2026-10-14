@@ -17,8 +17,8 @@ from . import kernels as K
 from .config import BC_TYPES, CaseConfig
 from .io_csv import MassWriter, MonitorWriter
 from .io_vtk import write_pvd, write_vtu
-from .mesh import TriMesh, classify_boundaries
-from .state import bathymetry_at, build_bathymetry, build_initial, nearest_cell
+from .mesh import TriMesh, classify_boundaries, cli_chains, read_cli
+from .state import bathymetry_at, build_bathymetry, build_initial, edge_bed, nearest_cell
 
 
 def _load_level_series(path: str) -> tuple[np.ndarray, np.ndarray]:
@@ -96,15 +96,28 @@ class ShallowWaterSolver:
         # ---- boundary prep ----------------------------------------------
         groups = cfg.boundary
         self.n_groups = len(groups)
+        chain_map = self._load_chain_map(mesh, groups)
         group_of = classify_boundaries(mesh, [
             {"name": g.name, "select": g.select, "type": g.type} for g in groups
-        ])
+        ], chain_map[0] if chain_map else None)
+        if chain_map:
+            self._chains = chain_map[1]
+        else:
+            self._chains = None
         bedge_group = np.full(ne, -1, dtype=np.int32)
         bparam = np.zeros(ne, dtype=np.float64)
+        # bord.f semantics: a prescribed level Z is stored as the ghost
+        # DEPTH max(0, Z - ZF(boundary node)) -- over the node bed, not
+        # the cell bed.  On steep valley banks (culm) the cell bed can sit
+        # above the prescribed level where the node bed does not; using
+        # the cell bed there dries the ghost and the boundary drains the
+        # domain (culm lost 63% of its volume that way).
+        bedge_zb = np.zeros(ne, dtype=np.float64)
         self._time_groups = []  # harmonic/series level boundary descriptors
         for gi, grp in enumerate(groups):
             sel_edges = mesh.boundary_edges[group_of == gi]
             bedge_group[sel_edges] = gi
+            bedge_zb[sel_edges] = edge_bed(cfg, mesh, sel_edges)
             if grp.type == "level":
                 if grp.time:
                     ts = grp.time
@@ -115,6 +128,20 @@ class ShallowWaterSolver:
                             {"edges": sel_edges, "kind": "series",
                              "t": t_arr, "z": z_arr})
                         bparam[sel_edges] = np.interp(0.0, t_arr, z_arr)
+                    elif "soliton" in ts:
+                        # incident solitary wave (user_sl.f convention);
+                        # base is the still-water level the crest rides on
+                        # (= h0 unless the wave is a pure uplift, e.g.
+                        # triangular_shelf prescribes eta only)
+                        sp = ts["soliton"]
+                        h0 = float(sp["h0"])
+                        amp = float(sp["H"])
+                        t0 = float(sp.get("t0", 0.0))
+                        base = float(sp.get("base", h0))
+                        self._time_groups.append(
+                            {"edges": sel_edges, "kind": "soliton",
+                             "h0": h0, "H": amp, "t0": t0, "base": base})
+                        bparam[sel_edges] = base
                     else:
                         # harmonic level: zs(t) = mean + amp*sin(2 pi t/T + ph)
                         mean = float(ts["mean"])
@@ -136,23 +163,41 @@ class ShallowWaterSolver:
                 sign = -1.0 if grp.value >= 0.0 else 1.0
                 bparam[sel_edges] = sign * abs(grp.value) / \
                     np.sum(mesh.edge_len[sel_edges])
+                if grp.time and "series" in grp.time:
+                    # time-varying total discharge (TELEMAC liquid
+                    # boundary file); stored with the kernel sign
+                    t_arr, q_arr = _load_level_series(grp.time["series"])
+                    q_signed = sign * np.abs(q_arr) / \
+                        np.sum(mesh.edge_len[sel_edges])
+                    self._time_groups.append(
+                        {"edges": sel_edges, "kind": "series",
+                         "t": t_arr, "z": q_signed})
+                    bparam[sel_edges] = q_signed[0]
         self.bedge_group = wp.array(bedge_group, dtype=wp.int32)
         self.btype = wp.array(
             np.array([BC_TYPES[g.type] for g in groups], dtype=np.int32),
             dtype=wp.int32)
         self.bparam = wp.array(bparam, dtype=wp.float64)
+        self.bedge_zb = wp.array(bedge_zb, dtype=wp.float64)
         self.bflux = wp.zeros(self.n_groups, dtype=wp.float64)
         self._bcvol = wp.zeros(self.n_groups, dtype=wp.float64)
         self._group_of = group_of
         self._bparam_host = bparam
 
         # ---- source terms ------------------------------------------------
-        if cfg.strickler > 0.0:
+        if cfg.chezy > 0.0:
+            self.strickler = wp.array(
+                np.full(n, float(cfg.chezy), dtype=np.float64),
+                dtype=wp.float64)
+            self._chezy = 1
+        elif cfg.strickler > 0.0:
             self.strickler = wp.array(
                 np.full(n, float(cfg.strickler), dtype=np.float64),
                 dtype=wp.float64)
+            self._chezy = 0
         else:
             self.strickler = None
+            self._chezy = 0
         self.wind_on = cfg.wind_coeff != 0.0
 
         # ---- monitors ----------------------------------------------------
@@ -171,6 +216,19 @@ class ShallowWaterSolver:
         return build_initial(self.cfg, mesh, zb)
 
     # ------------------------------------------------------------------
+    def _load_chain_map(self, mesh: TriMesh,
+                        groups: list) -> tuple[np.ndarray, list] | None:
+        """Boundary-chain map for .cli-selected groups, else None.
+
+        Follows the TELEMAC convention that the .cli sits next to the
+        geometry file (geo.slf <-> geo.cli)."""
+        if not any("chain" in g.select for g in groups):
+            return None
+        cli_path = Path(self.cfg.mesh.file).with_suffix(".cli")
+        cli = read_cli(str(cli_path))
+        return cli_chains(mesh, cli)
+
+    # ------------------------------------------------------------------
     def update_time_bcs(self, t: float) -> None:
         """Refresh time-dependent level boundary values at time t (no-op
         if all boundaries are steady)."""
@@ -179,6 +237,11 @@ class ShallowWaterSolver:
         for grp in self._time_groups:
             if grp["kind"] == "series":
                 z = float(np.interp(t, grp["t"], grp["z"]))
+            elif grp["kind"] == "soliton":
+                h0, amp, t0 = grp["h0"], grp["H"], grp["t0"]
+                k = np.sqrt(0.75 * amp / h0 ** 3)
+                c = np.sqrt(9.81 * (h0 + amp))
+                z = grp.get("base", h0) + amp / np.cosh(k * (c * t - t0)) ** 2
             else:
                 z = grp["mean"] + grp["amp"] * np.sin(
                     2.0 * np.pi * t / grp["period"] + grp["phase"])
@@ -233,7 +296,7 @@ class ShallowWaterSolver:
             self.slope_w, self.slope_u, self.slope_v, self.slope_z,
             self.centroid, self.edge_midpoint, self.edge_cells,
             self.edge_normal, self.edge_len,
-            self.bedge_group, self.btype, self.bparam,
+            self.bedge_group, self.btype, self.bparam, self.bedge_zb,
             self.rhs, self.bflux,
             wp.int32(self.cfg.order),
         ])
@@ -258,7 +321,7 @@ class ShallowWaterSolver:
                 self.w, self.rhs, self.area, wp.float64(dt), self.wb])
             if self.strickler is not None:
                 wp.launch(K.k_friction, dim=self.n_cells, inputs=[
-                    self.wb, self.strickler, wp.float64(dt)])
+                    self.wb, self.strickler, wp.float64(dt), self._chezy])
             self.w, self.wb = self.wb, self.w
         else:
             # SSP-RK2: w1 = w + dt L(w); w_new = 0.5 (w + w1 + dt L(w1))
@@ -267,13 +330,13 @@ class ShallowWaterSolver:
                 self.w, self.rhs, self.area, wp.float64(dt), self.w2])
             if self.strickler is not None:
                 wp.launch(K.k_friction, dim=self.n_cells, inputs=[
-                    self.w2, self.strickler, wp.float64(dt)])
+                    self.w2, self.strickler, wp.float64(dt), self._chezy])
             self._evaluate_rhs(self.w2, 0.5 * dt)
             wp.launch(K.k_update, dim=self.n_cells, inputs=[
                 self.w2, self.rhs, self.area, wp.float64(dt), self.wb])
             if self.strickler is not None:
                 wp.launch(K.k_friction, dim=self.n_cells, inputs=[
-                    self.wb, self.strickler, wp.float64(dt)])
+                    self.wb, self.strickler, wp.float64(dt), self._chezy])
             wp.launch(K.k_comb, dim=self.n_cells, inputs=[
                 self.w, self.wb, self.w2])
             self.w, self.w2 = self.w2, self.w
@@ -318,9 +381,13 @@ class ShallowWaterSolver:
         def dump_frame() -> None:
             snap = self.snapshot()
             fname = f"frame_{len(frames):05d}.vtu"
+            if self.mesh.bottom is not None:
+                node_zb = self.mesh.bottom
+            else:
+                node_zb = bathymetry_at(cfg, self.mesh.nodes[:, 0],
+                                        self.mesh.nodes[:, 1])
             write_vtu(out_dir / fname, self.mesh.nodes, self.mesh.tris,
-                      bathymetry_at(cfg,
-                                    self.mesh.nodes[:, 0], self.mesh.nodes[:, 1]),
+                      node_zb,
                       {"h": snap["h"], "u": snap["u"], "v": snap["v"],
                        "zb": snap["zb"], "zs": snap["zs"]})
             frames.append((self.t, fname))

@@ -26,7 +26,8 @@ def test_friction_riccati() -> None:
                  dtype=wp.vec3d)
     ks = wp.array(np.array([kf], dtype=np.float64), dtype=wp.float64)
     for _ in range(n_steps):
-        wp.launch(K.k_friction, dim=1, inputs=[w, ks, wp.float64(dt)])
+        wp.launch(K.k_friction, dim=1,
+                  inputs=[w, ks, wp.float64(dt), wp.int32(0)])
     w_np = w.numpy()[0]
     alpha = 9.81 / (kf * kf * h0 ** (4.0 / 3.0))
     decay = 1.0 + alpha * np.hypot(u0, v0) * (dt * n_steps)
@@ -46,7 +47,8 @@ def test_friction_dry_and_off() -> None:
     w = wp.array(np.array([[0.0, 5.0, 5.0], [1.0, 1.0, 0.0]], dtype=np.float64),
                  dtype=wp.vec3d)
     ks = wp.array(np.array([0.0, 0.0], dtype=np.float64), dtype=wp.float64)
-    wp.launch(K.k_friction, dim=2, inputs=[w, ks, wp.float64(1.0)])
+    wp.launch(K.k_friction, dim=2,
+              inputs=[w, ks, wp.float64(1.0), wp.int32(0)])
     w_np = w.numpy()
     assert np.all(w_np == np.array([[0.0, 5.0, 5.0], [1.0, 1.0, 0.0]]))
     print("friction: dry / off cells untouched")

@@ -75,7 +75,7 @@ class BathymetryConfig:
 @dataclass
 class BoundaryGroup:
     name: str
-    select: dict  # {"xmin": [y0, y1]} or {"ymin": [x0, x1]}, single key
+    select: dict  # {"xmin": [y0, y1]} / {"ymin": [x0, x1]} / {"chain": k}
     type: str  # wall | outflow | inflow_q | level
     value: float = 0.0  # zs for level [m], Q total for inflow_q [m^3/s]
     time: dict = field(default_factory=dict)
@@ -83,8 +83,17 @@ class BoundaryGroup:
     #   harmonic: zs(t) = mean + amp*sin(2*pi*t/period+phase)
     #     keys: mean, amp, period; optional phase [rad] (default 0), or
     #   series: {file: <path>} -- two-column time/elevation table,
-    #     linearly interpolated (TELEMAC liquid-boundary file).
-    # When ``time`` is non-empty it overrides ``value`` for ``level`` groups.
+    #     linearly interpolated (TELEMAC liquid-boundary file), or
+    #   soliton: {h0, H, t0} -- incident solitary wave
+    #     zs(t) = h0 + H/cosh(K (c t - t0))^2 (conical_island user_sl.f).
+    #     optional base (default h0): crest level the wave rides on --
+    #     set 0 for a pure-uplift wave over zs = 0 water
+    #     (triangular_shelf user_sl.f).
+    # When ``time`` is non-empty it overrides ``value`` for ``level``
+    # groups (a level series) and for ``inflow_q`` groups (a total-
+    # discharge series; the series column is Q in m^3/s).
+    # select chain k refers to the k-th (1-based) boundary chain of the
+    # mesh's .cli file (unstructured meshes).
 
 
 @dataclass
@@ -96,6 +105,12 @@ class OutputConfig:
     centerline_y: float = 0.0
     band: float = 0.05  # |y - centerline_y| half width for profile extraction
     average_window: float = 0.0  # time-average state over last N s (<=0 off)
+    observed: dict = field(default_factory=dict)
+    # Measured-data comparison (solver/compare_obs.py):
+    #   max_depth: [{name, x, y, measured}]      peak h at the point [m]
+    #   arrival:   [{name, x, y, threshold}]     first t with h >= threshold
+    #   arrival_diffs: [{name, a, b, measured}]  t_b - t_a vs measured [s]
+    # every x/y point is auto-appended to ``monitors``.
 
 
 @dataclass
@@ -115,6 +130,7 @@ class CaseConfig:
     output: OutputConfig
     g: float = 9.81
     strickler: float = 0.0  # bottom friction K [m^(1/3)/s], 0 = off
+    chezy: float = 0.0  # bottom friction C [m^(1/2)/s], 0 = off (wins over strickler)
     wind_u: float = 0.0  # wind velocity [m/s]
     wind_v: float = 0.0
     wind_coeff: float = 0.0  # a_wind * rho_air / rho_water, 0 = off
@@ -146,6 +162,12 @@ def load_config(path: str | Path) -> CaseConfig:
                  f"{path}: mesh.diagonal must be alternating|fixed")
     elif mesh.type == "selafin":
         _require(mesh.file, f"{path}: mesh.file required for selafin")
+        # resolve against the yaml's directory so cases stay relocatable
+        fp = Path(mesh.file)
+        if not fp.is_absolute():
+            fp = path.parent / fp
+        _require(fp.is_file(), f"{path}: mesh file missing: {fp}")
+        mesh.file = str(fp)
     else:
         raise ValueError(f"{path}: unknown mesh.type {mesh.type!r}")
 
@@ -153,13 +175,40 @@ def load_config(path: str | Path) -> CaseConfig:
     _require("type" in initial, f"{path}: initial.type missing")
     ini = InitialConfig(type=initial["type"],
                         params=dict(initial.get("params") or {}))
+    if ini.type == "selafin_state":
+        _require("file" in ini.params,
+                 f"{path}: initial selafin_state needs params.file")
+        fp = Path(str(ini.params["file"]))
+        if not fp.is_absolute():
+            fp = path.parent / fp
+        _require(fp.is_file(), f"{path}: initial state file missing: {fp}")
+        ini.params["file"] = str(fp)
+    if ini.type == "level_profile":
+        _require("file" in ini.params,
+                 f"{path}: initial level_profile needs params.file")
+        fp = Path(str(ini.params["file"]))
+        if not fp.is_absolute():
+            fp = path.parent / fp
+        _require(fp.is_file(), f"{path}: initial sections file missing: {fp}")
+        ini.params["file"] = str(fp)
 
     bath = raw.get("bathymetry") or {"type": "flat", "params": {}}
     bathcfg = BathymetryConfig(type=bath.get("type", "flat"),
                                params=dict(bath.get("params") or {}))
     _require(bathcfg.type in ("flat", "bump", "thacker", "slope", "bolzano",
-                              "beach", "vasque"),
+                              "beach", "vasque", "selafin", "selafin_ref"),
              f"{path}: unknown bathymetry type {bathcfg.type!r}")
+    if bathcfg.type == "selafin":
+        _require(mesh.type == "selafin",
+                 f"{path}: bathymetry selafin requires mesh.type selafin")
+    if bathcfg.type == "selafin_ref":
+        _require("file" in bathcfg.params,
+                 f"{path}: bathymetry selafin_ref needs params.file")
+        fp = Path(str(bathcfg.params["file"]))
+        if not fp.is_absolute():
+            fp = path.parent / fp
+        _require(fp.is_file(), f"{path}: bathymetry ref file missing: {fp}")
+        bathcfg.params["file"] = str(fp)
 
     groups_raw = (raw.get("boundary") or {}).get("groups") or []
     _require(groups_raw, f"{path}: boundary.groups must not be empty")
@@ -171,14 +220,26 @@ def load_config(path: str | Path) -> CaseConfig:
         _require(isinstance(g["select"], dict) and len(g["select"]) == 1,
                  f"{path}: select must have exactly one key: {g.get('name')}")
         (side, span), = g["select"].items()
-        _require(side in ("xmin", "xmax", "ymin", "ymax"),
-                 f"{path}: select side {side!r} invalid")
-        _require(isinstance(span, list) and len(span) == 2,
-                 f"{path}: select span must be [a, b]: {g.get('name')}")
+        if side == "chain":
+            chain_sel = span if isinstance(span, list) else [span]
+            _require(all((isinstance(c, int) and c >= 1) or c == "rest"
+                         for c in chain_sel),
+                     f"{path}: select chain must be 1-based int(s) or "
+                     f"'rest': {g.get('name')}")
+            if "rest" in chain_sel:
+                _require(len(chain_sel) == 1,
+                         f"{path}: chain rest cannot be combined: "
+                         f"{g.get('name')}")
+        else:
+            _require(side in ("xmin", "xmax", "ymin", "ymax"),
+                     f"{path}: select side {side!r} invalid")
+            _require(isinstance(span, list) and len(span) == 2,
+                     f"{path}: select span must be [a, b]: {g.get('name')}")
         tspec = dict(g.get("time") or {})
         if tspec:
-            _require(g["type"] == "level",
-                     f"{path}: time-dependent value only for level: {g['name']}")
+            _require(g["type"] in ("level", "inflow_q"),
+                     f"{path}: time-dependent value only for level or "
+                     f"inflow_q: {g['name']}")
             if "series" in tspec:
                 # file-driven level boundary: resolve the path against the
                 # yaml's directory so cases stay relocatable
@@ -188,6 +249,14 @@ def load_config(path: str | Path) -> CaseConfig:
                 _require(fp.is_file(),
                          f"{path}: bc series file missing: {fp}")
                 tspec = {"series": str(fp)}
+            elif "soliton" in tspec:
+                # incident solitary wave (conical_island user_sl.f):
+                # zs(t) = h0 + H/cosh(K (c t - t0))^2,
+                # K = sqrt(0.75 H/h0^3), c = sqrt(g (h0 + H))
+                sp = dict(tspec["soliton"])
+                _require("h0" in sp and "H" in sp,
+                         f"{path}: soliton needs h0/H: {g['name']}")
+                tspec = {"soliton": sp}
             else:
                 _require("mean" in tspec and "amp" in tspec and "period" in tspec,
                          f"{path}: bc time needs mean/amp/period or series: {g['name']}")
@@ -210,6 +279,22 @@ def load_config(path: str | Path) -> CaseConfig:
     _require(limiter in ("none", "barth"), f"{path}: unknown limiter {limiter!r}")
 
     out = raw.get("output") or {}
+    observed = dict(out.get("observed") or {})
+    _require(all(k in ("max_depth", "arrival", "arrival_diffs",
+                       "telemac_ref")
+                 for k in observed),
+             f"{path}: output.observed keys must be max_depth/arrival/"
+             f"arrival_diffs/telemac_ref, got {sorted(observed)}")
+    if "telemac_ref" in observed:
+        ref = dict(observed["telemac_ref"])
+        _require("file" in ref,
+                 f"{path}: telemac_ref needs file: {ref}")
+        fp = Path(str(ref["file"]))
+        if not fp.is_absolute():
+            fp = path.parent / fp
+        _require(fp.is_file(), f"{path}: telemac_ref file missing: {fp}")
+        ref["file"] = str(fp)
+        observed["telemac_ref"] = ref
     output = OutputConfig(
         dir=out.get("dir", "output"),
         vtk_interval=float(out.get("vtk_interval", 0.0)),
@@ -218,7 +303,22 @@ def load_config(path: str | Path) -> CaseConfig:
         centerline_y=float(out.get("centerline_y", 0.0)),
         band=float(out.get("band", 0.05)),
         average_window=float(out.get("average_window", 0.0)),
+        observed=observed,
     )
+    # observed points are monitored automatically (name carried through);
+    # a point already monitored (e.g. listed under two observed kinds)
+    # is kept once -- compare_obs keys entries by name, not by monitor row
+    seen = {(round(float(m["x"]), 9), round(float(m["y"]), 9))
+            for m in output.monitors}
+    for entry in observed.get("max_depth", []) + observed.get("arrival", []):
+        _require("name" in entry and "x" in entry and "y" in entry,
+                 f"{path}: observed entries need name/x/y: {entry}")
+        key = (round(float(entry["x"]), 9), round(float(entry["y"]), 9))
+        if key not in seen:
+            seen.add(key)
+            output.monitors.append({"name": entry["name"],
+                                    "x": float(entry["x"]),
+                                    "y": float(entry["y"])})
 
     phys = raw.get("physics") or {}
     g = float(phys.get("g", 9.81))
@@ -227,6 +327,8 @@ def load_config(path: str | Path) -> CaseConfig:
         raise ValueError(f"{path}: physics.g={g} unsupported; kernels use 9.81")
     strickler = float(phys.get("strickler", 0.0))
     _require(strickler >= 0.0, f"{path}: physics.strickler must be >= 0")
+    chezy = float(phys.get("chezy", 0.0))
+    _require(chezy >= 0.0, f"{path}: physics.chezy must be >= 0")
     wind = dict(phys.get("wind") or {})
     coriolis = float(phys.get("coriolis", 0.0))
     return CaseConfig(
@@ -245,6 +347,7 @@ def load_config(path: str | Path) -> CaseConfig:
         output=output,
         g=g,
         strickler=strickler,
+        chezy=chezy,
         wind_u=float(wind.get("u", 0.0)),
         wind_v=float(wind.get("v", 0.0)),
         wind_coeff=float(wind.get("coeff", 0.0)),
