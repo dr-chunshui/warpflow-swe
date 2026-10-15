@@ -105,7 +105,17 @@ class ShallowWaterSolver:
         else:
             self._chains = None
         bedge_group = np.full(ne, -1, dtype=np.int32)
+        # Kernel boundary params (kernels.py ghost_state):
+        #   bparam[e]  inflow normal velocity alpha [m/s, outward-signed] --
+        #              GPU-managed, refreshed every stage by k_inflow_alpha
+        #              (DEBIMP: Q / sum(H_cell * L), bord.f PROVEL=0 profile
+        #              + cdl_fv.f:63 rescale);
+        #   bqc[e]     per-edge reference unit discharge |Q|/sum(L) [m2/s]
+        #              for the critical-depth dry-inlet branches;
+        #   bval[g]    per-group prescribed level zs [m] (level groups).
         bparam = np.zeros(ne, dtype=np.float64)
+        bqc = np.zeros(ne, dtype=np.float64)
+        bval = np.zeros(self.n_groups, dtype=np.float64)
         # bord.f semantics: a prescribed level Z is stored as the ghost
         # DEPTH max(0, Z - ZF(boundary node)) -- over the node bed, not
         # the cell bed.  On steep valley banks (culm) the cell bed can sit
@@ -113,7 +123,10 @@ class ShallowWaterSolver:
         # the cell bed there dries the ghost and the boundary drains the
         # domain (culm lost 63% of its volume that way).
         bedge_zb = np.zeros(ne, dtype=np.float64)
-        self._time_groups = []  # harmonic/series level boundary descriptors
+        # per-group signed total discharge (positive OUT of the domain,
+        # matching the kernel bparam convention)
+        q_target = np.zeros(self.n_groups, dtype=np.float64)
+        self._time_groups = []  # time-dependent boundary descriptors
         for gi, grp in enumerate(groups):
             sel_edges = mesh.boundary_edges[group_of == gi]
             bedge_group[sel_edges] = gi
@@ -125,9 +138,9 @@ class ShallowWaterSolver:
                         # file-driven level: two-column table, np.interp
                         t_arr, z_arr = _load_level_series(ts["series"])
                         self._time_groups.append(
-                            {"edges": sel_edges, "kind": "series",
+                            {"gi": gi, "kind": "series",
                              "t": t_arr, "z": z_arr})
-                        bparam[sel_edges] = np.interp(0.0, t_arr, z_arr)
+                        bval[gi] = np.interp(0.0, t_arr, z_arr)
                     elif "soliton" in ts:
                         # incident solitary wave (user_sl.f convention);
                         # base is the still-water level the crest rides on
@@ -139,9 +152,9 @@ class ShallowWaterSolver:
                         t0 = float(sp.get("t0", 0.0))
                         base = float(sp.get("base", h0))
                         self._time_groups.append(
-                            {"edges": sel_edges, "kind": "soliton",
+                            {"gi": gi, "kind": "soliton",
                              "h0": h0, "H": amp, "t0": t0, "base": base})
-                        bparam[sel_edges] = base
+                        bval[gi] = base
                     else:
                         # harmonic level: zs(t) = mean + amp*sin(2 pi t/T + ph)
                         mean = float(ts["mean"])
@@ -149,55 +162,74 @@ class ShallowWaterSolver:
                         period = float(ts["period"])
                         phase = float(ts.get("phase", 0.0))
                         self._time_groups.append(
-                            {"edges": sel_edges, "kind": "harm",
+                            {"gi": gi, "kind": "harm",
                              "mean": mean, "amp": amp, "period": period,
                              "phase": phase})
-                        bparam[sel_edges] = mean + amp * np.sin(phase)
+                        bval[gi] = mean + amp * np.sin(phase)
                 else:
-                    bparam[sel_edges] = grp.value
+                    bval[gi] = grp.value
             elif grp.type == "inflow_q":
-                # Uniform unit-width discharge q = Q / total edge length:
-                # sum(q * L_e) = Q exactly.  Kernel convention: bparam is
-                # signed along the OUTWARD edge normal, so a positive cfg
-                # value (inflow) is stored negative (value < 0 = outflow).
+                # DEBIMP distribution (k_inflow_alpha): the total Q is
+                # re-spread every stage as a uniform normal velocity over
+                # the wet section, so the delivered flux follows the depth
+                # pattern (deep parts carry proportionally more water)
+                # instead of forcing one unit discharge into every edge.
+                # Kernel sign convention: positive OUT along the outward
+                # normal, so a positive cfg value (inflow) is negative.
                 sign = -1.0 if grp.value >= 0.0 else 1.0
-                bparam[sel_edges] = sign * abs(grp.value) / \
-                    np.sum(mesh.edge_len[sel_edges])
+                tot_len = np.sum(mesh.edge_len[sel_edges])
+                bqc[sel_edges] = abs(grp.value) / tot_len
+                q_target[gi] = sign * abs(grp.value)
                 if grp.time and "series" in grp.time:
                     # time-varying total discharge (TELEMAC liquid
-                    # boundary file); stored with the kernel sign
+                    # boundary file column, m3/s)
                     t_arr, q_arr = _load_level_series(grp.time["series"])
-                    q_signed = sign * np.abs(q_arr) / \
-                        np.sum(mesh.edge_len[sel_edges])
                     self._time_groups.append(
-                        {"edges": sel_edges, "kind": "series",
-                         "t": t_arr, "z": q_signed})
-                    bparam[sel_edges] = q_signed[0]
+                        {"gi": gi, "kind": "qseries",
+                         "t": t_arr, "z": sign * np.abs(q_arr),
+                         "edges": sel_edges, "len": tot_len})
+                    q_target[gi] = (sign * np.abs(q_arr))[0]
         self.bedge_group = wp.array(bedge_group, dtype=wp.int32)
-        self.btype = wp.array(
-            np.array([BC_TYPES[g.type] for g in groups], dtype=np.int32),
-            dtype=wp.int32)
+        btype_np = np.array([BC_TYPES[g.type] for g in groups], dtype=np.int32)
+        self.btype = wp.array(btype_np, dtype=wp.int32)
         self.bparam = wp.array(bparam, dtype=wp.float64)
+        self.bqc = wp.array(bqc, dtype=wp.float64)
+        self._bqc_host = bqc
+        self.bval = wp.array(bval, dtype=wp.float64)
+        self._bval_host = bval
+        self.q_target = wp.array(q_target, dtype=wp.float64)
+        self._q_target_host = q_target
+        self.qw = wp.zeros(self.n_groups, dtype=wp.float64)
+        self._has_inflow_q = bool((btype_np == 2).any())
         self.bedge_zb = wp.array(bedge_zb, dtype=wp.float64)
         self.bflux = wp.zeros(self.n_groups, dtype=wp.float64)
         self._bcvol = wp.zeros(self.n_groups, dtype=wp.float64)
+        # previous-stage delivered boundary flux per group (snapshot of
+        # bflux taken before it is zeroed); drives k_inflow_feedback
+        self.q_deliv = wp.zeros(self.n_groups, dtype=wp.float64)
         self._group_of = group_of
-        self._bparam_host = bparam
 
         # ---- source terms ------------------------------------------------
+        # k_friction mode: 0 = Strickler K, 1 = Chezy C, 2 = Nikuradse ks
+        # (the per-cell array carries K / C / ks respectively)
         if cfg.chezy > 0.0:
             self.strickler = wp.array(
                 np.full(n, float(cfg.chezy), dtype=np.float64),
                 dtype=wp.float64)
-            self._chezy = 1
+            self._fric_mode = 1
+        elif cfg.nikuradse > 0.0:
+            self.strickler = wp.array(
+                np.full(n, float(cfg.nikuradse), dtype=np.float64),
+                dtype=wp.float64)
+            self._fric_mode = 2
         elif cfg.strickler > 0.0:
             self.strickler = wp.array(
                 np.full(n, float(cfg.strickler), dtype=np.float64),
                 dtype=wp.float64)
-            self._chezy = 0
+            self._fric_mode = 0
         else:
             self.strickler = None
-            self._chezy = 0
+            self._fric_mode = 0
         self.wind_on = cfg.wind_coeff != 0.0
 
         # ---- monitors ----------------------------------------------------
@@ -230,23 +262,41 @@ class ShallowWaterSolver:
 
     # ------------------------------------------------------------------
     def update_time_bcs(self, t: float) -> None:
-        """Refresh time-dependent level boundary values at time t (no-op
-        if all boundaries are steady)."""
+        """Refresh time-dependent boundary values at time t (no-op if all
+        boundaries are steady).  Level values land in the tiny per-group
+        bval array, discharge targets in q_target (+ the per-edge critical
+        scale bqc); the per-edge inflow alpha is GPU-managed and must not
+        be touched here."""
         if not self._time_groups:
             return
+        bval_dirty = False
+        q_dirty = False
         for grp in self._time_groups:
-            if grp["kind"] == "series":
-                z = float(np.interp(t, grp["t"], grp["z"]))
-            elif grp["kind"] == "soliton":
-                h0, amp, t0 = grp["h0"], grp["H"], grp["t0"]
-                k = np.sqrt(0.75 * amp / h0 ** 3)
-                c = np.sqrt(9.81 * (h0 + amp))
-                z = grp.get("base", h0) + amp / np.cosh(k * (c * t - t0)) ** 2
+            kind = grp["kind"]
+            if kind == "qseries":
+                q = float(np.interp(t, grp["t"], grp["z"]))
+                self._q_target_host[grp["gi"]] = q
+                # the per-edge critical-discharge scale follows |Q(t)|
+                self._bqc_host[grp["edges"]] = abs(q) / grp["len"]
+                q_dirty = True
             else:
-                z = grp["mean"] + grp["amp"] * np.sin(
-                    2.0 * np.pi * t / grp["period"] + grp["phase"])
-            self._bparam_host[grp["edges"]] = z
-        self.bparam = wp.array(self._bparam_host, dtype=wp.float64)
+                if kind == "series":
+                    z = float(np.interp(t, grp["t"], grp["z"]))
+                elif kind == "soliton":
+                    h0, amp, t0 = grp["h0"], grp["H"], grp["t0"]
+                    k = np.sqrt(0.75 * amp / h0 ** 3)
+                    c = np.sqrt(9.81 * (h0 + amp))
+                    z = grp.get("base", h0) + amp / np.cosh(k * (c * t - t0)) ** 2
+                else:
+                    z = grp["mean"] + grp["amp"] * np.sin(
+                        2.0 * np.pi * t / grp["period"] + grp["phase"])
+                self._bval_host[grp["gi"]] = z
+                bval_dirty = True
+        if bval_dirty:
+            self.bval = wp.array(self._bval_host, dtype=wp.float64)
+        if q_dirty:
+            self.q_target = wp.array(self._q_target_host, dtype=wp.float64)
+            self.bqc = wp.array(self._bqc_host, dtype=wp.float64)
 
     # ------------------------------------------------------------------
     def compute_dt(self, t_remaining: float) -> float:
@@ -267,6 +317,13 @@ class ShallowWaterSolver:
             return 0.0
         return -float(self._bcvol.numpy().sum())
 
+    def boundary_inflows(self) -> list:
+        """Per-boundary-group cumulative net inflow volumes [m^3] (positive
+        = into the domain; one device sync)."""
+        if self.n_groups == 0:
+            return []
+        return (-self._bcvol.numpy()).tolist()
+
     # ------------------------------------------------------------------
     def _evaluate_rhs(self, w_state: wp.array, dtw: float = 0.0) -> None:
         """rhs = -div F(w_state) + S; resets rhs and bflux first.
@@ -276,6 +333,10 @@ class ShallowWaterSolver:
         dt/2 per RK2 stage so boundary_inflow() integrates the exact
         flux that entered the discrete update."""
         wp.launch(K.k_zero_vec3, dim=self.n_cells, inputs=[self.rhs])
+        if self._has_inflow_q:
+            # snapshot the previous stage's delivered flux for the
+            # feedback rescale (bflux is zeroed right below)
+            wp.copy(self.q_deliv, self.bflux)
         wp.launch(K.k_zero_f64, dim=self.n_groups, inputs=[self.bflux])
         if self.cfg.order == 2:
             wp.launch(K.k_green_gauss, dim=self.n_cells, inputs=[
@@ -291,12 +352,24 @@ class ShallowWaterSolver:
                 wp.launch(K.k_slope_none, dim=self.n_cells, inputs=[
                     self.grad_w, self.grad_u, self.grad_v, self.grad_z,
                     self.slope_w, self.slope_u, self.slope_v, self.slope_z])
+        if self._has_inflow_q:
+            # inflow velocity control: DEBIMP base on the first stage,
+            # then integral feedback against the delivered flux
+            # (kernels.k_inflow_alpha_ctrl docstring)
+            wp.launch(K.k_zero_f64, dim=self.n_groups, inputs=[self.qw])
+            wp.launch(K.k_qw_sum, dim=self.mesh.n_edges, inputs=[
+                w_state, self.edge_cells, self.bedge_group, self.btype,
+                self.edge_len, self.qw])
+            wp.launch(K.k_inflow_alpha_ctrl, dim=self.mesh.n_edges, inputs=[
+                self.bedge_group, self.btype, self.q_target, self.qw,
+                self.q_deliv, self.bparam])
         wp.launch(K.k_flux, dim=self.mesh.n_edges, inputs=[
             w_state, self.zb,
             self.slope_w, self.slope_u, self.slope_v, self.slope_z,
             self.centroid, self.edge_midpoint, self.edge_cells,
             self.edge_normal, self.edge_len,
-            self.bedge_group, self.btype, self.bparam, self.bedge_zb,
+            self.bedge_group, self.btype, self.bparam, self.bqc, self.bval,
+            self.bedge_zb,
             self.rhs, self.bflux,
             wp.int32(self.cfg.order),
         ])
@@ -321,7 +394,7 @@ class ShallowWaterSolver:
                 self.w, self.rhs, self.area, wp.float64(dt), self.wb])
             if self.strickler is not None:
                 wp.launch(K.k_friction, dim=self.n_cells, inputs=[
-                    self.wb, self.strickler, wp.float64(dt), self._chezy])
+                    self.wb, self.strickler, wp.float64(dt), self._fric_mode])
             self.w, self.wb = self.wb, self.w
         else:
             # SSP-RK2: w1 = w + dt L(w); w_new = 0.5 (w + w1 + dt L(w1))
@@ -330,13 +403,13 @@ class ShallowWaterSolver:
                 self.w, self.rhs, self.area, wp.float64(dt), self.w2])
             if self.strickler is not None:
                 wp.launch(K.k_friction, dim=self.n_cells, inputs=[
-                    self.w2, self.strickler, wp.float64(dt), self._chezy])
+                    self.w2, self.strickler, wp.float64(dt), self._fric_mode])
             self._evaluate_rhs(self.w2, 0.5 * dt)
             wp.launch(K.k_update, dim=self.n_cells, inputs=[
                 self.w2, self.rhs, self.area, wp.float64(dt), self.wb])
             if self.strickler is not None:
                 wp.launch(K.k_friction, dim=self.n_cells, inputs=[
-                    self.wb, self.strickler, wp.float64(dt), self._chezy])
+                    self.wb, self.strickler, wp.float64(dt), self._fric_mode])
             wp.launch(K.k_comb, dim=self.n_cells, inputs=[
                 self.w, self.wb, self.w2])
             self.w, self.w2 = self.w2, self.w
@@ -376,7 +449,8 @@ class ShallowWaterSolver:
         mon = MonitorWriter(out_dir / "monitors.csv",
                             [m.get("name", f"m{i}")
                              for i, m in enumerate(cfg.output.monitors)])
-        mw = MassWriter(out_dir / "history.csv")
+        mw = MassWriter(out_dir / "history.csv",
+                        [g.name for g in cfg.boundary])
 
         def dump_frame() -> None:
             snap = self.snapshot()
@@ -399,7 +473,8 @@ class ShallowWaterSolver:
             mon.write(self.t, vals)
             mw.write(self.t, self.mass(), self.boundary_inflow(),
                      self._last_dt if hasattr(self, "_last_dt") else 0.0,
-                     float(snap["h"].min()), float(snap["h"].max()))
+                     float(snap["h"].min()), float(snap["h"].max()),
+                     self.boundary_inflows())
 
         if vtk_on:
             dump_frame()
@@ -456,4 +531,6 @@ class ShallowWaterSolver:
         if abs(qbc) > 0.0:
             msg += (f", q_bc = {qbc:.12g} m^3, mass-balance residual = "
                     f"{m_fin - self._mass0 - qbc:.3e} m^3")
+            for g, v in zip(cfg.boundary, self.boundary_inflows()):
+                msg += f"\n  bc[{g.name}] = {v:.10g} m^3"
         print(msg + f" -> {out_dir}")

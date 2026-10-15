@@ -7,16 +7,34 @@
 # 11.82 m at chain 4 (PRESCRIBED ELEVATIONS, second NUMLIQ).
 # Uniform Nikuradse ks = 0.035 m (LAW OF BOTTOM FRICTION 5).
 # friction_calc.f CASE(5) is the fully-rough LOG LAW of the wall,
-# CF = 2/(ln(11.036 h/ks)/kappa)^2 -- equivalent Chezy C = 44-45 over
-# the reach depth range, i.e. Strickler K ~ 44, NOT the Griffith scale
-# form K = 21.1/ks^(1/6) = 36.9 (that form is ~19% too rough here and
-# ponded the steady profile +0.46 m in the channel).
-# K = 44.0.  TELEMAC runs 360 steps x 120 s to t = 43200 s
+# CF = 2/(ln(max(1.001, 11.036 h/ks))/kappa)^2 with kappa = 0.40
+# (cosake.f KARMAN) -- modelled here directly (physics.nikuradse).
+# Earlier calibration note: a uniform Strickler K = 44 (reached via the
+# empirically-adjusted "equivalent" of the log law; the Griffith scale
+# form K = 21.1/ks^(1/6) = 36.9 is ~19% too rough and ponded the steady
+# profile +0.46 m) gave L1 = 0.124; the true depth-dependent log law
+# replaces it.  TELEMAC runs 360 steps x 120 s to t = 43200 s
 # for steady state; the constant 2 m2/s turbulent viscosity of the
 # reference is not modelled.  The FV reference f2d_wesel.slf stores
 # only the final steady state.
 #
 # Acceptance: free surface vs f2d_wesel.slf (node-wise L1/L2/Linf).
+#
+# Residual notes (2026-10-15, level-ghost repaired to the cdl_fv.f
+# semantics -- interior cell state left, ghost right, subcritical
+# correction ugn = un + 2(c1-cg) with c1 from the cell surface carried
+# to the node bed): L1 = 0.211, volume +8.8% vs the reference, outlet
+# reach surface +0.19 m (was +0.48 under the collapsed ghost).  The
+# remaining gap concentrates in the mid-depth band: (a) TELEMAC's
+# level-boundary NODES are pinned to 11.82 m in its output field
+# (bord.f writes the FE array H) while the neighbouring dual cells
+# ride ~14.2 m, so the reference's P1 field dips near the outlet chain
+# -- a cell-centred scheme cannot reproduce that artifact; (b) the
+# reference's constant 2 m2/s turbulent viscosity is not modelled.
+# The inflow delivers exactly Q = 1061 (integral control; TELEMAC
+# itself over-delivers +1.8%).  Friction sensitivity: uniform
+# K = 44 under the same boundary treatment gave L1 = 0.129, but LAW 5
+# Nikuradse ks = 0.035 is what the manual prescribes and is kept.
 case:
   name: wesel
   t_end: 43200.0
@@ -27,7 +45,7 @@ mesh:
 
 physics:
   g: 9.81
-  strickler: 44.0
+  nikuradse: 0.035
 
 initial:
   type: level_profile

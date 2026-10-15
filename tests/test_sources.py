@@ -54,6 +54,34 @@ def test_friction_dry_and_off() -> None:
     print("friction: dry / off cells untouched")
 
 
+def test_friction_nikuradse() -> None:
+    """Nikuradse log law (mode 2) matches friction_calc.f CASE 5 exactly:
+    CF = 2/(ln(max(1.001, 11.036 h/ks))/kappa)^2, kappa = 0.40, and the
+    semi-implicit map is the same Riccati with C(h)^2 = g/CF."""
+    wp.init()
+    h0, u0, v0 = 7.0, 0.8, 0.0
+    ks = 0.035
+    dt, n_steps = 0.1, 100
+    w = wp.array(np.array([[h0, h0 * u0, h0 * v0]], dtype=np.float64),
+                 dtype=wp.vec3d)
+    arr = wp.array(np.array([ks], dtype=np.float64), dtype=wp.float64)
+    for _ in range(n_steps):
+        wp.launch(K.k_friction, dim=1,
+                  inputs=[w, arr, wp.float64(dt), wp.int32(2)])
+    w_np = w.numpy()[0]
+    c2 = 0.5 * 9.81 * (np.log(max(1.001, 11.036 * h0 / ks)) / 0.40) ** 2
+    alpha = 9.81 / (c2 * h0)
+    decay = 1.0 + alpha * np.hypot(u0, v0) * (dt * n_steps)
+    expect_u = u0 / decay
+    assert abs(w_np[1] / h0 - expect_u) < 1.0e-13, \
+        f"u: {w_np[1] / h0} vs {expect_u}"
+    # sanity: C(7 m, 0.035) ~ 42.6 (log law), NOT the Griffith K = 36.9
+    c_impl = np.sqrt(9.81 / (2.0 / (np.log(11.036 * h0 / ks) / 0.40) ** 2))
+    assert 42.0 < c_impl < 43.5, f"C(h=7) = {c_impl}"
+    print(f"nikuradse: u(T) = {w_np[1] / h0:.12f}, exact = {expect_u:.12f}, "
+          f"C(7 m) = {c_impl:.2f}")
+
+
 def test_wind_source() -> None:
     """k_wind adds area * c_w |W| W to the momentum rows (conservative
     d(hu)/dt rate -- NO h division; stress per unit area)."""
@@ -106,16 +134,14 @@ def test_harmonic_bc() -> None:
     mesh = rect_mesh(0.0, 2.0, 0.0, 0.4, dx=0.2)
     s = ShallowWaterSolver(cfg, mesh)
     mean, amp, period, phase = 10.0, 0.05, 0.5, 0.3
-    inlet_edges = s._time_groups[0]["edges"]
     for t in (0.0, 0.125, 0.25, 0.437):
         s.update_time_bcs(t)
-        got = s._bparam_host[inlet_edges]
+        # time-dependent values land in the per-group bval slot (gi = 0)
+        got = s._bval_host[s._time_groups[0]["gi"]]
         expect = mean + amp * np.sin(2.0 * np.pi * t / period + phase)
-        assert np.allclose(got, expect, rtol=0.0, atol=1.0e-15), \
-            f"t={t}: {got[:2]} vs {expect}"
-    # the constant level group must be untouched by the refresh
-    outlet_edges = s.mesh.boundary_edges[np.nonzero(s._group_of == 1)[0]]
-    assert np.allclose(s._bparam_host[outlet_edges], 10.0)
+        assert abs(got - expect) < 1.0e-15, f"t={t}: {got} vs {expect}"
+    # the constant level group slot (gi = 1) must be untouched
+    assert s._bval_host[1] == 10.0
     print("harmonic bc: zs(t) evaluated exactly at 4 sample times")
 
 
@@ -127,6 +153,7 @@ def BathymetryFlat():
 def main() -> int:
     test_friction_riccati()
     test_friction_dry_and_off()
+    test_friction_nikuradse()
     test_wind_source()
     test_harmonic_bc()
     print("PASS: source-term kernels + harmonic boundary")

@@ -60,17 +60,19 @@ output: {dir: output/tmp_test}
     cfg = load_config(yf.name)
     from solver.solver import ShallowWaterSolver
     s = ShallowWaterSolver(cfg, mesh)
-    q0 = s._bparam_host[s._time_groups[0]["edges"]]
+    # the time series lands in the per-group q_target slot; the kernel
+    # sign convention keeps inflow negative (positive = out of domain)
     q1 = s._time_groups[0]["z"]
-    # stored with the kernel sign: inflow is negative along the normal
     assert np.all(q1[:1] < 0.0), q1[:1]
-    assert abs(-q1[0] - 10.0 / 1.0) < 1e-12  # t=0: 10 m3/s over L=1 m
+    s.update_time_bcs(0.0)
+    assert s._q_target_host[s._time_groups[0]["gi"]] == -10.0, \
+        s._q_target_host
     s.update_time_bcs(100.0)
-    q100 = s._bparam_host[s._time_groups[0]["edges"]]
-    assert abs(-q100[0] - 30.0 / 1.0) < 1e-12, q100
+    assert s._q_target_host[s._time_groups[0]["gi"]] == -30.0, \
+        s._q_target_host
     s.update_time_bcs(50.0)
-    q50 = s._bparam_host[s._time_groups[0]["edges"]]
-    assert abs(-q50[0] - 20.0 / 1.0) < 1e-12, q50
+    assert s._q_target_host[s._time_groups[0]["gi"]] == -20.0, \
+        s._q_target_host
     print("inflow_q series ok: Q(0)=10, Q(50)=20 (interp), Q(100)=30 m3/s")
 
     print("PASS: P1 sampling + time-varying inflow capability verified")

@@ -31,19 +31,26 @@ class MonitorWriter:
 
 class MassWriter:
     """Global history: t, mass, q_bc (cumulative net boundary inflow
-    volume), dt, min_h, max_h."""
+    volume), dt, min_h, max_h, plus one qbc_<group> column per boundary
+    group with the same cumulative net volume split by group."""
 
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, group_names: list | None = None):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._f = open(self.path, "w", newline="", encoding="ascii")
         self._w = csv.writer(self._f)
-        self._w.writerow(["t", "mass", "q_bc", "dt", "h_min", "h_max"])
+        header = ["t", "mass", "q_bc", "dt", "h_min", "h_max"]
+        for i, _ in enumerate(group_names or []):
+            header.append(f"qbc_g{i}")
+        self._w.writerow(header)
 
     def write(self, t: float, mass: float, qbc: float, dt: float,
-              hmin: float, hmax: float) -> None:
-        self._w.writerow([f"{t:.6f}", f"{mass:.12g}", f"{qbc:.12g}",
-                          f"{dt:.10g}", f"{hmin:.10g}", f"{hmax:.10g}"])
+              hmin: float, hmax: float, qbc_groups: list | None = None) -> None:
+        row = [f"{t:.6f}", f"{mass:.12g}", f"{qbc:.12g}",
+               f"{dt:.10g}", f"{hmin:.10g}", f"{hmax:.10g}"]
+        for v in qbc_groups or []:
+            row.append(f"{v:.12g}")
+        self._w.writerow(row)
         self._f.flush()
 
     def close(self) -> None:

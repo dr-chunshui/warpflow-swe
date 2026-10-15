@@ -20,11 +20,11 @@ warp-lang 1.18.0, Python 3.10.
 | seiche | Linear standing wave, closed flume | 200x1.8 m | 1 / 2 | amplitude after 7.4 periods >= 0.95 A0 | 5% decay | 3.2% (o1) / 2.1% (o2) | PASS |
 | bump/subcritical | Steady subcritical flow over bump | 20x2 m | 1 / 2 | L1(h) vs analytic steady profile <= 0.02 | 0.02 m | 3.0e-3 / 1.5e-3 | PASS |
 | bump/critical | Steady critical flow over bump | 20x2 m | 1 / 2 | L1(h) <= 0.02 | 0.02 m | 1.7e-3 / 5.2e-4 | PASS |
-| bump/transcritical | Transcritical flow with shock | 20x2 m | 1 / 2 | L1(h) <= 0.02, shock position | 0.02 m / 2 dx | 3.6e-3 / 3.1e-3, shock 12.1 m (o1) / 12.0 m (o2) vs 11.81 m analytic (1.5 dx / 0.9 dx) | PASS |
-| friction | GVF channel, slope + Strickler (ch. 27) | 410x0.45 km, dx 1 km | 1 | L1(h) vs relaxed GVF steady profile | baseline | 3.3e-2 m (0.3% of depth), l1_u 8.5e-3 | PASS |
+| bump/transcritical | Transcritical flow over bump | 20x2 m | 1 / 2 | L1(h) <= 0.02, shock position | 0.02 m / 2 dx | 3.7e-3 / 8.6e-3, shock 12.12 m (both) vs 11.81 m analytic (1.3 dx) — the level-ghost repair (note 24) shifts the jump by ~0.3 m, still in tolerance | PASS |
+| friction | GVF channel, slope + Strickler (ch. 27) | 410x0.45 km, dx 1 km | 1 | L1(h) vs relaxed GVF steady profile | baseline | 3.4e-2 m (0.3% of depth), l1_u 8.5e-3 | PASS |
 | wave | Harmonic progressive wave (ch. 56) | 16x0.3 m, dx 0.05 | 1 | L1(u) after 10 periods | TELEMAC: <3% amp. (Thompson) | 6.9e-3 (14% of A); interior-only 1.2e-3 | PARTIAL (BC-limited, note 8) |
 | wind | Wind set-up, closed basin (ch. 59) | 500x100 m, dx 5 | 1 | time-mean L1(h) vs analytic steady profile | TELEMAC: 0.006% of dz | 9.7e-4 m (~0.12% of dz) | PASS |
-| balzano | Tidal-flat draw-down, wet/dry equilibrium (ch. 3) | 13800x1200 m, dx 60 | 1 | L1(h) vs piecewise lake-at-rest at t = 70000 s | baseline | 5.3e-2 m (~2% of max depth); sea monitor within 0.18 m of -2; mass balance 6.1e-7 m3 | PASS (note 11) |
+| balzano | Tidal-flat draw-down, wet/dry equilibrium (ch. 3) | 13800x1200 m, dx 60 | 1 | L1(h) vs piecewise lake-at-rest at t = 70000 s | baseline | 4.0e-2 m (~1.5% of max depth; was 5.3e-2 before the level-ghost repair, note 24); sea monitor within 0.18 m of -2; mass balance 6.1e-7 m3 | PASS (note 11) |
 | canal | Stage-discharge channel flow (ch. 9) | 500x100 m, dx 5 | 1 | L1(h) vs steady GVF profile | baseline | 6.4e-4 m; surface 0.745 -> 0.532 m (manual ~0.75 -> 0.5); mass balance 2.1e-10 m3 | PASS |
 | vasque | Draw-down over a pool, partial drying (ch. 54) | 46x9 m, dx 1 | 1 | L1(h) vs final equilibrium | baseline | 4.8e-3 m (<1% of max depth; drainage films still settling, note 12); mass balance 5.7e-14 m3 | PASS |
 | tests_channel | Solitary-wave run-up on 1:19.85 beach (ch. 48) | 50x1 m, dx 0.25 | 1 | R/d: experiment 0.076-0.078, TELEMAC FV 0.084 | dissipation-controlled | 0.106 frictionless (0.133 at dx 0.125); 0.099 with Cf = 0.001 (manual FV + Cf: 0.077), note 13 | PARTIAL |
@@ -201,12 +201,12 @@ reference time (`solver/compare_telemac.py`, `mode: final_field`).
 | malpasset (31) | 1964 dam-break flood, 10 662 tris; reservoir IC behind the dam line (distan.f), wall + free outlet | K = 30, order 1, 4000 s | wave arrival A->B / A->C (1140 / 1320 s measured); 9 gauges max depth | 1150 s (+0.9%) / 1230 s (-6.8%); P8 +0.1%, P11 +7.6%, P13 +120% (9 gauges, note 15) | PASS |
 | conical_island (16) | solitary wave H/h = 0.045 over a conical island, lab scale | C = 100, soliton inlet | final-field L1/L2/Linf vs f2d_island (kinetic FV) at t = 20 s | 0.0027 / 0.0037 / 0.014 m (still depth 0.32 m) | PASS |
 | triangular_shelf (53) | ISEC 2009 benchmark, H/h = 0.5 solitary wave running up a triangular shelf | C = 180, soliton inlet (pure uplift) | final-field L1/L2/Linf vs f2d_triangular_shelf at t = 20 s | 0.0168 / 0.0237 / 0.087 m (wave height 0.39 m) | PASS |
-| monai_valley (33) | Synolakis coastal-village tsunami experiment, measured incident wave gauge record | C = 180, series level inlet | final-field L1/L2/Linf vs f2d_monai at t = 22.5 s | 0.00041 / 0.00077 / 0.0138 m (wave amplitude 0.0162 m) | PASS |
+| monai_valley (33) | Synolakis coastal-village tsunami experiment, measured incident wave gauge record | C = 180, series level inlet | final-field L1/L2/Linf vs f2d_monai at t = 22.5 s | 0.00070 / 0.00119 / 0.0128 m (wave amplitude 0.0162 m; was 0.00041/0.00077/0.0138 before the level-ghost repair -- same class) | PASS |
 | swash_solution (47) | analytic swash on a plane beach, tilted free surface drains; 8 x 0.5 m flume | frictionless, ramp_cutoff IC + level drain | final-field L1/L2/Linf vs f2d_swash at t = 12 s (domain nearly drained) | 0.0015 / 0.0074 / 0.052 m (note 17) | PASS |
-| culm (18) | transient flood on the River Culm (11 km meandering reach, ~19 m channel on an 18-258 m mesh); Q(t) and SL(t) from the TELEMAC liquid-boundary file t2d_culm.qsl; hot start from ini_culm.slf (note 22) | K = 30 (Strickler, LAW 3), inflow_q + level time series | final-field L1/L2/Linf vs f2d_culm at t = 54000 s (recession limb) | 0.347 / 0.445 / 1.20 m (downstream backwater matches to -0.09; the upper reach recession drains ~3x faster than the reference, note 24) | PARTIAL |
-| donau (22) | Danube 7.7 km reach, 4 bridges + groyne fields; terrain + hot start from the f2d reference itself (notes 19/22) | K = 40 (calibrated equivalent, notes 18/20), Q = 218 at chain 4 (upstream) / SL = 309.205 at chain 2 (downstream) | final-field L1/L2/Linf vs f2d_donau | 0.287 / 0.440 / 3.69 m (uniform +0.12..+0.25 m ponding, cell-centred level-boundary layer; Linf in bridge-pier triangles as before, notes 20/24) | PARTIAL |
-| wesel (58) | Rhine km 812.5-821.5, 93 surveyed cross-sections drive the initial surface (SURFINI) | K = 44 (log-law equivalent of Nikuradse ks = 0.035, note 18), Q = 1061 / SL = 11.82 | final-field L1/L2/Linf vs f2d_wesel at t = 43200 s | 0.124 / 0.221 / 2.19 m (volume +2.5%; main channel ponds +0.15..+0.18 m -- the constant K = 44 equivalent is ~4% too rough at h = 7 m where the log law gives C ~ 46; shallows -0.07..-0.09 m, note 18) | PARTIAL |
-| digue (21) | V-shaped (45 deg) breakwater overflow into two downstream pools; 100 m3/s injected upstream (west chain), quasi-steady end state | K = 55, inflow_q 100 west / 0 east (note 21) | final-field L1/L2/Linf vs f2d_digue at t = 14000 s + mass balance | 0.0736 / 0.0914 / 0.186 m (time-mean over [12000, 14000] s, notes 21/23); mass residual ~1e-8 m3 | PASS |
+| culm (18) | transient flood on the River Culm (11 km meandering reach, ~19 m channel on an 18-258 m mesh); Q(t) and SL(t) from the TELEMAC liquid-boundary file t2d_culm.qsl; hot start from ini_culm.slf (note 22) | K = 30 (Strickler, LAW 3), inflow_q + level time series | final-field L1/L2/Linf vs f2d_culm at t = 54000 s (recession limb) | 0.347 / 0.445 / 1.20 m (our inflow integral matches the prescribed Q to 0.01%; the REFERENCE over-delivers 1.89x its own prescribed inflow at t_end and is still net filling -- the gap belongs to the reference, note 24) | PARTIAL |
+| donau (22) | Danube 7.7 km reach, 4 bridges + groyne fields; terrain + hot start from the f2d reference itself (notes 19/22) | K = 40 (calibrated equivalent, notes 18/20), Q = 218 at chain 4 (upstream) / SL = 309.205 at chain 2 (downstream) | time-averaged field over [45000, 60000] s vs f2d_donau (standing long wave, note 20) | 0.280 / 0.438 / 3.69 m (surface uniformly +0.06..+0.12 m above the reference: equivalent-K calibration + pinned-boundary-node comparison basis; Linf in bridge-pier triangles, notes 20/24) | PARTIAL |
+| wesel (58) | Rhine km 812.5-821.5, 93 surveyed cross-sections drive the initial surface (SURFINI) | Nikuradse ks = 0.035 modelled directly (log law, LAW 5, note 18), Q = 1061 (integral control) / SL = 11.82 | final-field L1/L2/Linf vs f2d_wesel at t = 43200 s | 0.211 / 0.320 / 2.09 m (volume +8.8%, outlet reach +0.19 m; TELEMAC over-delivers its inflow +1.8% and its level-chain nodes are pinned to 11.82 in the output field; uniform K = 44 sensitivity gives 0.129 but the manual prescribes the log law, notes 18/24) | PARTIAL |
+| digue (21) | V-shaped (45 deg) breakwater overflow into two downstream pools; 100 m3/s injected upstream (west chain), quasi-steady end state | K = 55, inflow_q 100 west / 0 east (note 21) | final-field L1/L2/Linf vs f2d_digue at t = 14000 s + mass balance | 0.0708 / 0.0887 / 0.182 m (time-mean over [12000, 14000] s, notes 21/23; was 0.0736/0.0914/0.186 under the collapsed level ghost -- the corrected subcritical release improves all three); mass residual ~1e-8 m3 | PASS |
 
 ### Case notes
 
@@ -246,13 +246,15 @@ reference time (`solver/compare_telemac.py`, `mode: final_field`).
     at ks = 0.035 m the log law equals Strickler K ~ 44 over the
     wesel depth range while Griffith gives 36.9 (~19% too rough,
     which ponded our first steady profile +0.46 m above the
-    reference in the channel); wesel therefore runs K = 44.
-    K = 44 recovers the steady profile to L1 = 0.124 m with the
-    reach volume +2.5% (was +10.6% under Griffith): the residual
-    ponding (+0.15..+0.18 m in the main channel) is the constant
-    equivalent being ~4% too rough at h = 7 m, where the depth
-    varying log law gives C ~ 46; matching that would need
-    pointwise-Chezy friction, which the solver does not offer yet.
+    reference in the channel).  wesel therefore models the log law
+    directly (`physics.nikuradse`), which reproduces the reference
+    to L1 = 0.211 m; inverting the steady field puts our effective
+    K median at 31.9 against the law's own 31 -- the implementation
+    matches TELEMAC's.  A uniform K = 44 calibration under the same
+    boundary treatment still scores L1 = 0.129 (kept as a sensitivity
+    datapoint only: it is not the prescribed law, and its older 0.124
+    also benefited from the +8% inflow over-delivery that the integral
+    control has since removed).
     donau's zonal roughness is still one calibrated K = 40 (note 20):
     the slope-ratio calibration absorbs whatever law difference the
     7 zones contain.
@@ -273,6 +275,13 @@ reference time (`solver/compare_telemac.py`, `mode: final_field`).
     bridge-pier and wetting-front triangles where the reference field
     itself jumps > 3 m between adjacent nodes (sampling, not solution,
     error — the neighbourhood range of ref and ours agrees).
+    The valley also rings: the delivered inflow oscillates 120-310
+    m3/s around the prescribed mean 218 with a ~7500 s period and does
+    not decay (TELEMAC's larger numerical damping kills the same mode),
+    so the acceptance metric is the TIME AVERAGE of the field over the
+    last 15000 s (`average_window`), which scores L1 = 0.280 m with
+    the surface uniformly +0.06..+0.12 m above the reference --
+    calibration and comparison-basis, not boundary-flux error.
 21. **digue chain mapping, read back from the physics.** The .cli
     NUMLIQ order does not reveal which physical chain carries the
     100 m3/s inflow; the reference field does (the upstream pool ponds
@@ -327,29 +336,45 @@ reference time (`solver/compare_telemac.py`, `mode: final_field`).
     selafin terrain -> mean of the edge's two node beds (exact P1
     midpoint value), selafin_ref -> reference BOTTOM nearest the edge
     midpoint, analytic -> bed function at the midpoint.
-    (b) cdl_fv's subcritical ghost velocity UG = UNN + 2(C1 - CG)
-    COLLAPSES to UNN in TELEMAC, because its node-centred H1 is
-    re-imposed to HBOR every step, so C1 = CG identically.  Evaluating
-    C1 from the CELL depth (any bed offset between cell centre and
-    boundary nodes, or flood water ponded above the level) re-inflates
-    the term into a runaway pump: donau grew a 48 m water tower on its
-    level chain within one output frame, culm bled its flood peak
-    through the outlet.  The effective TELEMAC ghost is therefore
-    (prescribed depth, interior velocity), with the dry ghost
-    (hg <= eps), lake-at-rest supercritical-inflow and infinite-
-    reservoir supercritical-outflow branches unchanged (balzano).
-    digue -- whose level edges sit below the tide and wet -- reproduces
-    its 0.0736 L1 bit-for-bit under every variant of (b), confirming
-    the collapse argument where it applies.
-    Residual on culm (PARTIAL): with the final semantics the
-    downstream backwater matches the reference to -0.09 m, but the
-    upper-reach recession still drains ~3x faster (reference keeps
-    ~1.8 m in the upper channel at t = 54000 s, we keep ~1.1 m; final
-    volume 339k vs 877k m3).  The reference retains a 0.25 m sheet on
-    the floodplain and its boundary-adjacent velocities are ~0.05 m/s
-    where ours run 0.2-0.5 m/s; the mechanism (node-centred vs
-    cell-centred boundary flux structure on a coarse anisotropic mesh)
-    is not yet pinned down.
+    (b) The subcritical ghost velocity UG = UNN + 2(C1 - CG) is ACTIVE
+    in TELEMAC, not collapsed: cdl_fv.f reads H1 = W(1,IS), the free
+    node-dual-cell value -- bord.f's H%R(NBOR) re-imposition feeds the
+    FE/output arrays only, nothing copies them back into the conserved
+    W, and cdlproj touches wall nodes alone -- and the boundary flux is
+    FLUX_CHOICE(H1, HG, ...): interior cell state left, ghost right
+    (non-symmetric).  An earlier reading collapsed the correction to
+    UGN = UNN on the belief that H1 was re-imposed to HBOR each step;
+    that version under-drains every level outlet (wesel's outlet reach
+    ponded +0.48 m above the reference) and was reverted.  The
+    cell-centred translation that is shipped: c1 from the CELL SURFACE
+    carried to the node bed, hnode = max(ha + zb_cell - zb_node, 0)
+    (the raw cell depth mixes two bed references and inflates C1-CG by
+    the bed jump across the edge), ugn = un + 2(c1 - cg), vgn = vt,
+    flux(ha, hg, ua, va, ug, vg).  The correction is a contraction at
+    an outflow (drain lowers the surface lowers c1), and the historical
+    blow-ups that motivated the collapse came from the DEBIMP INFLOW
+    ghost instead -- hg = (un + 2c1 - ugn)^2/(4g) is quadratic in c1,
+    a genuine positive feedback -- which the integral inflow control
+    (alpha rescaled against the delivered flux every step) now
+    stabilizes.  The dry ghost (hg <= eps), lake-at-rest
+    supercritical-inflow and infinite-reservoir supercritical-outflow
+    branches are unchanged (balzano: TELEMAC stabilizes its transparent
+    hg = ha supercritical outflow through its node-centred update; the
+    reservoir ghost is our analogue of that anchor).
+    Residuals after the repair.  wesel (PARTIAL): L1 = 0.211, outlet
+    reach +0.19 m -- TELEMAC's level-chain NODES are pinned to 11.82 m
+    in its output field while its interior dual cells ride ~14.2 m, so
+    the reference P1 field dips near the outlet chain, an artifact a
+    cell-centred scheme cannot reproduce, plus the unmodelled constant
+    2 m2/s turbulent viscosity.  culm (PARTIAL, unchanged L1 = 0.347):
+    our inflow integral matches the prescribed Q to 0.01% while the
+    reference's own boundary-integrated inflow runs at 1.89x its
+    prescribed value at t_end and it is still net filling (+18 m3/s) --
+    the 538k m3 storage gap belongs to the reference's over-delivery,
+    and the outlet form provably cannot recover it (a symmetric-outlet
+    variant moved the final volume only +0.66%).  donau (PARTIAL):
+    time-averaged L1 = 0.280, a uniform +0.06..+0.12 m bias from the
+    equivalent-K calibration and the pinned-node comparison basis.
 
 ## Test suite
 

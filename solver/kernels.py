@@ -182,10 +182,13 @@ def hllc_flux(
 @wp.func
 def ghost_state(
     bct: wp.int32,
-    bparam: wp.float64,
+    bval: wp.float64,
+    bqc: wp.float64,
+    alpha: wp.float64,
     ha: wp.float64,
     ua: wp.float64,
     va: wp.float64,
+    zba: wp.float64,
     zbnd: wp.float64,
     nx: wp.float64,
     ny: wp.float64,
@@ -224,29 +227,33 @@ def ghost_state(
     elif bct == BC_LEVEL:
         # Prescribed free-surface elevation (bord.f: HBOR is the DEPTH
         # max(0, Z - ZF(boundary node)); here zbnd is that node bed).
-        zs = bparam
+        zs = bval
         hg = wp.max(zs - zbnd, wp.float64(0.0))
         un = nx * ua + ny * va
         vt = -ny * ua + nx * va
-        # cdl_fv.f assesses the regime and its subcritical ghost with
-        # C1 = sqrt(g*H1), where H1 is the boundary NODE depth -- which
-        # TELEMAC re-imposes to HBOR every step, so C1 == CG and the
-        # characteristic correction ugn = un + 2*(C1-CG) collapses to
-        # ugn = un.  Evaluating c1 from the CELL depth instead (any bed
-        # offset between cell centre and boundary nodes) re-inflates that
-        # term into a runaway pump: donau grew a 48 m tower on its level
-        # chain within one output frame, culm bled its flood peak through
-        # the outlet.  Keep the TELEMAC-effective ghost: prescribed
-        # depth, interior velocity.
+        # cdl_fv.f builds the subcritical ghost with the interior
+        # celerity of its own boundary DUAL CELL: C1 = sqrt(g*H1) with
+        # H1 = W(1,IS), never re-imposed to HBOR (bord.f writes the FE
+        # array H%R only, and nothing copies it back into W; cdlproj
+        # touches wall nodes alone).  Our analogue of "the depth at the
+        # boundary node on the node bed" is the CELL WATER SURFACE
+        # carried to the node bed -- taking the raw cell depth instead
+        # mixes two bed references and inflates C1-CG by the bed jump
+        # across the edge.  The correction is a contraction at an
+        # outflow (drain lowers the surface lowers C1), so it cannot
+        # pump by itself.
+        hnode = wp.max(ha + zba - zbnd, wp.float64(0.0))
+        c1 = wp.sqrt(G * wp.max(hnode, eps))
         cg = wp.sqrt(G * wp.max(hg, eps))
-        regime = (un + cg) * (un - cg)
+        regime = (un + c1) * (un - c1)
         if hg <= eps:
             ug = wp.float64(0.0)
             vg = wp.float64(0.0)
         elif regime < wp.float64(0.0):
-            # subcritical: interior velocity, prescribed depth
-            ug = nx * un - ny * vt
-            vg = ny * un + nx * vt
+            # subcritical: conserve the second Riemann invariant
+            ugn = un + wp.float64(2.0) * (c1 - cg)
+            ug = nx * ugn - ny * vt
+            vg = ny * ugn + nx * vt
         elif un <= wp.float64(0.0):
             # supercritical inflow with missing data: lake at rest
             ug = wp.float64(0.0)
@@ -267,40 +274,41 @@ def ghost_state(
             ug = wp.float64(0.0)
             vg = wp.float64(0.0)
     else:  # BC_INFLOW_Q
-        # Prescribed discharge per unit width on this edge, signed with
-        # the outward normal: q < 0 is inflow (mirrors cdl_fv.f where
-        # UGN = U.n carries the direction and TELEMAC computes it as
-        # Q/(h*L) from the current interior depth H1).
-        q = bparam
+        # Prescribed total discharge distributed as a UNIFORM NORMAL
+        # VELOCITY (bord.f PROVEL=0 + DEBIMP, re-scaled against the
+        # current wet section by cdl_fv.f:63-88): alpha = Q/sum(H_cell*L)
+        # is refreshed every step by k_inflow_alpha and passed in here as
+        # ``alpha``, signed with the outward normal (alpha < 0 = inflow).
         un = nx * ua + ny * va
         vt = -ny * ua + nx * va
         c1 = wp.sqrt(G * ha)
         regime = (un + c1) * (un - c1)
         # Critical-depth inflow state for dried-out/shallow edges: the
-        # ghost depth that carries the prescribed unit discharge at
-        # Froude 1.  cdl_fv.f routes a dry discharge boundary into its
-        # supercritical-inflow branch with HG = HBOR (a water-filled
-        # ghost), so its inlets keep feeding and re-wet; without this
-        # the guard below clamps hg to ~0 once the edge cell dries and
-        # the inlet dead-locks (culm: the outlet pulled the upstream
-        # reach dry within 500 s and the flood wave never entered).
-        qa = wp.abs(q)
+        # ghost depth that carries the group's reference unit discharge
+        # |Q|/sum(L) (bqc, a per-edge constant scale independent of the
+        # DEBIMP alpha) at Froude 1.  cdl_fv.f routes a dry discharge
+        # boundary into its supercritical-inflow branch, so its inlets
+        # keep feeding and re-wet; without this the guard below clamps
+        # hg to ~0 once the edge cell dries and the inlet dead-locks
+        # (culm: the outlet pulled the upstream reach dry within 500 s
+        # and the flood wave never entered).
+        qa = wp.abs(bqc)
         hc = wp.pow(qa * qa / G, wp.float64(1.0 / 3.0))
         if regime < wp.float64(0.0):
             # subcritical: ghost normal velocity from the current interior
             # depth; depth from conservation of the second Riemann invariant
-            ugn = q / wp.max(ha, eps)
+            ugn = alpha
             # Dry/shallow inflow guard.  The invariant-consistent ghost
             # depth scales like ugn^2/(4g), so a prescribed discharge over
-            # a nearly dry cell produces an astronomic ghost depth that
-            # floods the whole domain (digue ch.21: ha = 0.004 m at the
-            # inflow edge -> ugn = -27.7 m/s -> hg = 20 m).  TELEMAC only
-            # escapes because a strictly dry cell gives REGIME = 0 and
-            # lands in its supercritical-inflow branch (cdl_fv.f).  Cap
-            # the inflow speed at twice the interior celerity (critical-
-            # type inflow control): hg <= 4 ha, the edge feeds at a
-            # reduced rate, and the boundary self-heals -- ugn = q/ha
-            # resumes once the cell has wetted up.
+            # a nearly dry section drives alpha astronomic and floods the
+            # whole domain (digue ch.21: ha = 0.004 m at the inflow edge
+            # -> ugn = -27.7 m/s -> hg = 20 m).  TELEMAC only escapes
+            # because a strictly dry cell gives REGIME = 0 and lands in
+            # its supercritical-inflow branch (cdl_fv.f).  Cap the inflow
+            # speed at twice the interior celerity (critical-type inflow
+            # control): hg <= 4 ha, the edge feeds at a reduced rate, and
+            # the boundary self-heals -- once the section has wetted up
+            # the DEBIMP alpha shrinks back under the cap.
             ugn = wp.max(ugn, un - wp.float64(2.0) * c1)
             hgt = un + wp.float64(2.0) * c1 - ugn
             hg = hgt * hgt / (wp.float64(4.0) * G)
@@ -315,8 +323,8 @@ def ghost_state(
                 vg = ny * ugn + nx * vt
         elif un <= wp.float64(0.0):
             # supercritical inflow without imposed depth: feed at the
-            # critical state of the prescribed discharge (interior depth
-            # would vanish together with the cell it mirrors)
+            # critical state of the reference unit discharge (interior
+            # depth would vanish together with the cell it mirrors)
             hg = wp.max(ha, hc)
             ugn = -wp.sqrt(G * hg)
             ug = nx * ugn - ny * vt
@@ -567,7 +575,9 @@ def k_flux(
     edge_len: wp.array(dtype=wp.float64),
     bedge_group: wp.array(dtype=wp.int32),
     btype: wp.array(dtype=wp.int32),
-    bparam: wp.array(dtype=wp.float64),  # per-edge: zs or q_edge [m^2/s]
+    bparam: wp.array(dtype=wp.float64),  # per-edge inflow velocity alpha [m/s]
+    bqc: wp.array(dtype=wp.float64),  # per-edge |Q|/sum(L) critical scale
+    bval: wp.array(dtype=wp.float64),  # per-group prescribed level zs [m]
     bzb: wp.array(dtype=wp.float64),  # per-edge: boundary-node bed (bord.f)
     rhs: wp.array(dtype=wp.vec3d),
     bflux: wp.array(dtype=wp.float64),
@@ -585,7 +595,13 @@ def k_flux(
         # -------- boundary edge: cell-average state + ghost (cdl_fv.f) --
         ha, ua, va = primitive(w[a][0], w[a][1], w[a][2])
         grp = bedge_group[e]
-        hg, ug, vg = ghost_state(btype[grp], bparam[e], ha, ua, va, bzb[e], nx, ny)
+        hg, ug, vg = ghost_state(
+            btype[grp], bval[grp], bqc[e], bparam[e],
+            ha, ua, va, zb[a], bzb[e], nx, ny)
+        # cdl_fv.f:356 evaluates the boundary flux as
+        # FLUX_CHOICE(H1,HG,...) -- the interior CELL state on the left,
+        # the ghost on the right (bord.f's node re-imposition feeds the
+        # FE arrays only, never the FV flux).
         f0, f1, f2 = hllc_flux(ha, hg, ua, va, ug, vg, nx, ny)
         wp.atomic_add(rhs, a, wp.vec3d(-le * f0, -le * f1, -le * f2))
         wp.atomic_add(bflux, grp, le * f0)
@@ -725,21 +741,28 @@ def k_wind(
 
 
 # ---------------------------------------------------------------------------
-# Bottom friction, Strickler law K [m^(1/3)/s]: S_f = g |u| u / (K^2 h^(4/3)).
-# Semi-implicit operator splitting after each stage update: the scalar ODE
-# du/dt = -alpha u|u| is solved exactly by the backward-Euler map
-# u_new = u / (1 + dt alpha |u|) (Riccati), so the splitting is stable for
-# any dt and exact for steady uniform flow.  In-place, per cell: safe.
+# Bottom friction, semi-implicit operator splitting after each stage update.
+# mode 0: Strickler K [m^(1/3)/s], S_f = g |u| u / (K^2 h^(4/3)); the array
+#         carries K.
+# mode 1: Chezy C [m^(1/2)/s], S_f = g |u| u / (C^2 h); the array carries C.
+# mode 2: Nikuradse fully-rough log law of the wall (friction_calc.f CASE 5,
+#         uniform ks [m]; the array carries ks):
+#             CF = 2 / (ln(max(1.001, 11.036 h/ks)) / kappa)^2,
+#         kappa = 0.40 (cosake.f KARMAN), S_f = CF u|u| / h, i.e. the same
+#         Riccati map with C(h)^2 = g/CF.
+# The scalar ODE du/dt = -alpha u|u| is solved exactly by the backward-Euler
+# map u_new = u / (1 + dt alpha |u|) (Riccati), so the splitting is stable
+# for any dt and exact for steady uniform flow.  In-place, per cell: safe.
 # ---------------------------------------------------------------------------
 @wp.kernel
 def k_friction(
     w: wp.array(dtype=wp.vec3d),
-    strickler: wp.array(dtype=wp.float64),
+    coeff: wp.array(dtype=wp.float64),
     dt: wp.float64,
-    is_chezy: wp.int32,
+    mode: wp.int32,
 ):
     c = wp.tid()
-    kf = strickler[c]
+    kf = coeff[c]
     if kf <= EPS_F64:
         return
     h = w[c][0]
@@ -748,8 +771,14 @@ def k_friction(
     hu = w[c][1]
     hv = w[c][2]
     spd = wp.sqrt(hu * hu + hv * hv) / h
-    if is_chezy != 0:
+    if mode == 1:
         alpha = G * spd / (kf * kf * h)  # Chezy: g|u| / (C^2 h)
+    elif mode == 2:
+        # Nikuradse log law: C^2 = g/CF = 0.5 g (ln(max(1.001,11.036h/ks))/kappa)^2
+        aux = wp.max(wp.float64(1.001), h * wp.float64(11.036) / kf)
+        lk = wp.log(aux) / wp.float64(0.40)
+        c2 = wp.float64(0.5) * G * lk * lk
+        alpha = G * spd / (c2 * h)
     else:
         alpha = G * spd / (kf * kf * h * wp.cbrt(h))  # Strickler: g|u| / (K^2 h^(4/3))
     w[c] = wp.vec3d(h, hu / (wp.float64(1.0) + dt * alpha),
@@ -789,6 +818,74 @@ def k_acc_f64(
 ):
     i = wp.tid()
     dst[i] = dst[i] + rate[i] * s
+
+
+# ---------------------------------------------------------------------------
+# DEBIMP discharge normalization (bord.f PROVEL=0 profile + the cdl_fv.f:63
+# rescale against the current section): a prescribed total discharge Q is
+# spread over the boundary as a UNIFORM NORMAL VELOCITY
+#     alpha = Q / sum_edges(H_cell * L),
+# recomputed from the current state every stage.  The flux then follows the
+# depth pattern -- deep parts of the section carry proportionally more
+# water -- instead of forcing the same unit discharge q/L into every edge,
+# where the shallow-water guard clamps nearly dry edges to ~zero flux and
+# the delivered total falls short of Q (culm lost ~30% of its flood volume
+# that way; TELEMAC keeps the total exact by construction).  q_target is
+# the signed total discharge, positive OUT of the domain (kernel bparam
+# convention), so an inflow carries q_target < 0 and alpha < 0.
+# ---------------------------------------------------------------------------
+@wp.kernel
+def k_qw_sum(
+    w: wp.array(dtype=wp.vec3d),
+    edge_cells: wp.array(dtype=wp.vec2i),
+    bedge_group: wp.array(dtype=wp.int32),
+    btype: wp.array(dtype=wp.int32),
+    edge_len: wp.array(dtype=wp.float64),
+    qw: wp.array(dtype=wp.float64),
+):
+    e = wp.tid()
+    grp = bedge_group[e]
+    if grp < 0 or btype[grp] != BC_INFLOW_Q:
+        return
+    a = edge_cells[e][0]
+    h = wp.max(w[a][0], wp.float64(0.0))
+    wp.atomic_add(qw, grp, h * edge_len[e])
+
+
+@wp.kernel
+def k_inflow_alpha_ctrl(
+    bedge_group: wp.array(dtype=wp.int32),
+    btype: wp.array(dtype=wp.int32),
+    q_target: wp.array(dtype=wp.float64),
+    qw: wp.array(dtype=wp.float64),
+    q_deliv: wp.array(dtype=wp.float64),
+    bparam: wp.array(dtype=wp.float64),
+):
+    """Inflow velocity control (bparam = uniform normal velocity alpha).
+
+    Stage one (no delivered-flux history): plain DEBIMP base
+    alpha = Q_target / sum(H_cell * L), mirroring bord.f PROVEL=0 +
+    the cdl_fv.f Q2 rescale.
+
+    Afterwards: integral control.  The invariant-ghost HLL face flux
+    systematically over-delivers (measured +7.9% on wesel; TELEMAC's
+    own static Q2 rescale still leaves +1.8%), so keep the previous
+    alpha and multiply by sqrt(Q_target / F_delivered).  The square
+    root damps the loop (|d ln F_n / d ln F_{n-1}| = 1/2); because the
+    correction is integral (alpha only stops changing when
+    F_delivered = Q_target) the steady-state error is exactly zero as
+    long as F(alpha) is monotone.  Resetting the base every stage
+    instead would give the oscillation-prone map F_n ~ Q^2*G/F_{n-1}."""
+    e = wp.tid()
+    grp = bedge_group[e]
+    if grp < 0 or btype[grp] != BC_INFLOW_Q:
+        return
+    f = q_deliv[grp]
+    if wp.abs(f) < 1.0e-14:
+        qwg = wp.max(qw[grp], wp.float64(1.0e-12))
+        bparam[e] = q_target[grp] / qwg
+    else:
+        bparam[e] = bparam[e] * wp.sqrt(q_target[grp] / f)
 
 
 # ---------------------------------------------------------------------------

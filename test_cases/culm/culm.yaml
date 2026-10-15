@@ -15,6 +15,25 @@
 #
 # Acceptance: final-state free surface vs f2d_culm.slf (node-wise
 # L1/L2/Linf at t = 54000 s).
+#
+# Residual diagnosis (2026-10-15): the field error L1 = 0.347 is
+# dominated by the TELEMAC reference inflowing MORE than prescribed.
+# Our ledger closes on the prescribed values exactly: integral
+# delivered 2,205,588 m3 vs prescribed integral 2,205,530 (0.01%),
+# tail rate 20.65 vs prescribed 20.615.  The reference at t = 54000
+# still delivers 38.98 m3/s = 1.89x the prescribed 20.6 (its own
+# boundary-flux integration, cli LIHBOR=4 chain) and is still net
+# filling (+18 m3/s) with 0.6 m more water over the upstream reach
+# (1.75 m vs our 1.14 m at the inlet; outlet reach differs only 5%).
+# The over-delivery is the invariant-ghost face-flux bias (same
+# mechanism we measured on wesel at +1.8%, amplified by the shallow
+# recession); TELEMAC's own DEBIMP rescale leaves it in.  We keep the
+# prescribed Q as ground truth.  A symmetric level-outlet flux was
+# tested and REVERTED: cdl_fv.f:356 evaluates the boundary flux as
+# FLUX_CHOICE(H1,HG,...) -- interior CELL state left, ghost right
+# (bord.f's node re-imposition feeds the FE arrays only, never the FV
+# flux), so the non-symmetric form here IS the TELEMAC form; the sym
+# variant moved the final volume only +0.66% anyway.
 case:
   name: culm
   t_end: 54000.0

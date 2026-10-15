@@ -5,7 +5,7 @@
 # is taken from the BOTTOM variable of the TELEMAC FV reference
 # f2d_donau.slf itself (bathymetry selafin_ref); the run is hot
 # started from the same reference steady state (selafin_state) and
-# re-balanced for 6000 s under Q = 218 m3/s at chain 4 (upstream,
+# re-balanced to steady state under Q = 218 m3/s at chain 4 (upstream,
 # LIHBOR 4 + PRESCRIBED FLOWRATES) and level 309.205 m at chain 2
 # (downstream, PRESCRIBED ELEVATIONS).  The 7 Nikuradse friction
 # domains (ks 0.025 m main channel .. 10 m pier zones,
@@ -14,9 +14,25 @@
 # 28.6 groyne fields, 21-14 pier/structure zones).
 #
 # Acceptance: free surface vs f2d_donau.slf (node-wise L1/L2/Linf).
+#
+# Horizon note (2026-10-15): t_end was raised 6000 -> 60000 s.  The
+# first 6000 s run was still filling (+131.7 m3/s net), and the
+# 36000 s follow-up revealed a standing long-wave oscillation of the
+# 7.7 km valley: the delivered inflow rate swings 120-310 m3/s around
+# the prescribed mean 218 (period ~7500 s, mean exactly 218 -- the
+# integral inflow control holds the average), while the level outlet
+# drains a constant 218.  TELEMAC's larger numerical damping kills the
+# same mode, so the honest steady-state comparison is the TIME AVERAGE
+# of the last two oscillation periods (average_window).  With the
+# level ghost repaired to the cdl_fv.f semantics (subcritical
+# correction active) the time-averaged field gives L1 = 0.280: the
+# surface sits uniformly +0.06..+0.12 m above the reference (equivalent
+# K = 40 calibration + the cell-centred vs pinned-boundary-node
+# comparison basis; TELEMAC's output nodes on the level chain are held
+# at exactly 309.205 by bord.f), not a boundary-flux error.
 case:
   name: donau
-  t_end: 6000.0
+  t_end: 60000.0
 
 mesh:
   type: selafin
@@ -49,8 +65,9 @@ numerics:
 
 output:
   dir: output/donau
-  vtk_interval: 1000.0
-  csv_interval: 50.0
+  vtk_interval: 6000.0
+  csv_interval: 250.0
+  average_window: 15000.0
   monitors:
     - {name: upstream,   x: 64500.0, y: 11900.0}
     - {name: mid,        x: 67800.0, y: 11000.0}

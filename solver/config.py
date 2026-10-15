@@ -25,6 +25,8 @@ Schema example (dambreak/ritter.yaml):
 Extensions (TELEMAC validation cases wave / friction / wind):
 
     physics:  {strickler: 70.0,               # bottom friction K [m^(1/3)/s]
+               # or chezy: C [m^(1/2)/s], or nikuradse: ks [m] (log law,
+               # friction_calc.f CASE 5) -- mutually exclusive
                wind: {u: 5.0, v: 0.0, coeff: 1.2615e-3}}
     bathymetry: {type: slope, params: {z0: -4.0, slope: -1.85e-5}}
     boundary:
@@ -131,6 +133,8 @@ class CaseConfig:
     g: float = 9.81
     strickler: float = 0.0  # bottom friction K [m^(1/3)/s], 0 = off
     chezy: float = 0.0  # bottom friction C [m^(1/2)/s], 0 = off (wins over strickler)
+    nikuradse: float = 0.0  # roughness ks [m] for the log-law friction
+    # (friction_calc.f CASE 5), 0 = off (wins over strickler/chezy)
     wind_u: float = 0.0  # wind velocity [m/s]
     wind_v: float = 0.0
     wind_coeff: float = 0.0  # a_wind * rho_air / rho_water, 0 = off
@@ -329,6 +333,11 @@ def load_config(path: str | Path) -> CaseConfig:
     _require(strickler >= 0.0, f"{path}: physics.strickler must be >= 0")
     chezy = float(phys.get("chezy", 0.0))
     _require(chezy >= 0.0, f"{path}: physics.chezy must be >= 0")
+    nikuradse = float(phys.get("nikuradse", 0.0))
+    _require(nikuradse >= 0.0, f"{path}: physics.nikuradse must be >= 0")
+    _require(sum(1.0 for v in (strickler, chezy, nikuradse) if v > 0.0) <= 1,
+             f"{path}: physics friction law must be unique "
+             f"(strickler/chezy/nikuradse are mutually exclusive)")
     wind = dict(phys.get("wind") or {})
     coriolis = float(phys.get("coriolis", 0.0))
     return CaseConfig(
@@ -348,6 +357,7 @@ def load_config(path: str | Path) -> CaseConfig:
         g=g,
         strickler=strickler,
         chezy=chezy,
+        nikuradse=nikuradse,
         wind_u=float(wind.get("u", 0.0)),
         wind_v=float(wind.get("v", 0.0)),
         wind_coeff=float(wind.get("coeff", 0.0)),
