@@ -25,12 +25,16 @@
 # correction ugn = un + 2(c1-cg) with c1 from the cell surface carried
 # to the node bed): L1 = 0.211, volume +8.8% vs the reference, outlet
 # reach surface +0.19 m (was +0.48 under the collapsed ghost).  The
-# remaining gap concentrates in the mid-depth band: (a) TELEMAC's
-# level-boundary NODES are pinned to 11.82 m in its output field
-# (bord.f writes the FE array H) while the neighbouring dual cells
-# ride ~14.2 m, so the reference's P1 field dips near the outlet chain
-# -- a cell-centred scheme cannot reproduce that artifact; (b) the
-# reference's constant 2 m2/s turbulent viscosity is not modelled.
+# remaining gap concentrates in the mid-depth band: (a) a
+# boundary-exclusion experiment (tools/boundary_excluded_metric.py,
+# cells within 100-1200 m of a liquid chain removed) leaves wet L1
+# flat (0.359 -> 0.368), puts the near-chain bands BELOW the domain
+# average and the Linf cell in the interior, so TELEMAC's pinned
+# level-chain output nodes (11.82 m against interior dual cells
+# ~14.2 m) are real but a minor L1 contributor; (b) the dominant
+# residual is a domain-uniform wet bias of +0.31 m -- the reference's
+# constant 2 m2/s turbulent viscosity is not modelled (its own +1.8%
+# inflow over-delivery would push its surface the other way).
 # The inflow delivers exactly Q = 1061 (integral control; TELEMAC
 # itself over-delivers +1.8%).  Friction sensitivity: uniform
 # K = 44 under the same boundary treatment gave L1 = 0.129, but LAW 5

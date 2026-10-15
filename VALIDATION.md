@@ -204,8 +204,8 @@ reference time (`solver/compare_telemac.py`, `mode: final_field`).
 | monai_valley (33) | Synolakis coastal-village tsunami experiment, measured incident wave gauge record | C = 180, series level inlet | final-field L1/L2/Linf vs f2d_monai at t = 22.5 s | 0.00070 / 0.00119 / 0.0128 m (wave amplitude 0.0162 m; was 0.00041/0.00077/0.0138 before the level-ghost repair -- same class) | PASS |
 | swash_solution (47) | analytic swash on a plane beach, tilted free surface drains; 8 x 0.5 m flume | frictionless, ramp_cutoff IC + level drain | final-field L1/L2/Linf vs f2d_swash at t = 12 s (domain nearly drained) | 0.0015 / 0.0074 / 0.052 m (note 17) | PASS |
 | culm (18) | transient flood on the River Culm (11 km meandering reach, ~19 m channel on an 18-258 m mesh); Q(t) and SL(t) from the TELEMAC liquid-boundary file t2d_culm.qsl; hot start from ini_culm.slf (note 22) | K = 30 (Strickler, LAW 3), inflow_q + level time series | final-field L1/L2/Linf vs f2d_culm at t = 54000 s (recession limb) | 0.347 / 0.445 / 1.20 m (our inflow integral matches the prescribed Q to 0.01%; the REFERENCE over-delivers 1.89x its own prescribed inflow at t_end and is still net filling -- the gap belongs to the reference, note 24) | PARTIAL |
-| donau (22) | Danube 7.7 km reach, 4 bridges + groyne fields; terrain + hot start from the f2d reference itself (notes 19/22) | K = 40 (calibrated equivalent, notes 18/20), Q = 218 at chain 4 (upstream) / SL = 309.205 at chain 2 (downstream) | time-averaged field over [45000, 60000] s vs f2d_donau (standing long wave, note 20) | 0.280 / 0.438 / 3.69 m (surface uniformly +0.06..+0.12 m above the reference: equivalent-K calibration + pinned-boundary-node comparison basis; Linf in bridge-pier triangles, notes 20/24) | PARTIAL |
-| wesel (58) | Rhine km 812.5-821.5, 93 surveyed cross-sections drive the initial surface (SURFINI) | Nikuradse ks = 0.035 modelled directly (log law, LAW 5, note 18), Q = 1061 (integral control) / SL = 11.82 | final-field L1/L2/Linf vs f2d_wesel at t = 43200 s | 0.211 / 0.320 / 2.09 m (volume +8.8%, outlet reach +0.19 m; TELEMAC over-delivers its inflow +1.8% and its level-chain nodes are pinned to 11.82 in the output field; uniform K = 44 sensitivity gives 0.129 but the manual prescribes the log law, notes 18/24) | PARTIAL |
+| donau (22) | Danube 7.7 km reach, 4 bridges + groyne fields; terrain + hot start from the f2d reference itself (notes 19/22) | K = 40 (calibrated equivalent, notes 18/20), Q = 218 at chain 4 (upstream) / SL = 309.205 at chain 2 (downstream) | time-averaged field over [45000, 60000] s vs f2d_donau (standing long wave, note 20) | 0.280 / 0.438 / 3.69 m (surface uniformly +0.06..+0.12 m above the reference: equivalent-K calibration; the pinned-node basis is MINOR -- boundary-exclusion experiment, note 24; dry cells carry half the norm, 0.369 on 39% of the domain vs wet 0.223; Linf in bridge-pier triangles, notes 20/24) | PARTIAL |
+| wesel (58) | Rhine km 812.5-821.5, 93 surveyed cross-sections drive the initial surface (SURFINI) | Nikuradse ks = 0.035 modelled directly (log law, LAW 5, note 18), Q = 1061 (integral control) / SL = 11.82 | final-field L1/L2/Linf vs f2d_wesel at t = 43200 s | 0.211 / 0.320 / 2.09 m (volume +8.8%, outlet reach +0.19 m, uniform wet bias +0.31 m -- unmodelled 2 m2/s eddy viscosity; the pinned level-chain output nodes are minor by the boundary-exclusion experiment, note 24; TELEMAC over-delivers its inflow +1.8%; uniform K = 44 sensitivity gives 0.129 but the manual prescribes the log law, notes 18/24) | PARTIAL |
 | digue (21) | V-shaped (45 deg) breakwater overflow into two downstream pools; 100 m3/s injected upstream (west chain), quasi-steady end state | K = 55, inflow_q 100 west / 0 east (note 21) | final-field L1/L2/Linf vs f2d_digue at t = 14000 s + mass balance | 0.0708 / 0.0887 / 0.182 m (time-mean over [12000, 14000] s, notes 21/23; was 0.0736/0.0914/0.186 under the collapsed level ghost -- the corrected subcritical release improves all three); mass residual ~1e-8 m3 | PASS |
 
 ### Case notes
@@ -361,20 +361,34 @@ reference time (`solver/compare_telemac.py`, `mode: final_field`).
     branches are unchanged (balzano: TELEMAC stabilizes its transparent
     hg = ha supercritical outflow through its node-centred update; the
     reservoir ghost is our analogue of that anchor).
-    Residuals after the repair.  wesel (PARTIAL): L1 = 0.211, outlet
-    reach +0.19 m -- TELEMAC's level-chain NODES are pinned to 11.82 m
-    in its output field while its interior dual cells ride ~14.2 m, so
-    the reference P1 field dips near the outlet chain, an artifact a
-    cell-centred scheme cannot reproduce, plus the unmodelled constant
-    2 m2/s turbulent viscosity.  culm (PARTIAL, unchanged L1 = 0.347):
-    our inflow integral matches the prescribed Q to 0.01% while the
-    reference's own boundary-integrated inflow runs at 1.89x its
-    prescribed value at t_end and it is still net filling (+18 m3/s) --
-    the 538k m3 storage gap belongs to the reference's over-delivery,
-    and the outlet form provably cannot recover it (a symmetric-outlet
-    variant moved the final volume only +0.66%).  donau (PARTIAL):
-    time-averaged L1 = 0.280, a uniform +0.06..+0.12 m bias from the
-    equivalent-K calibration and the pinned-node comparison basis.
+    Residuals after the repair, bounded by a boundary-exclusion
+    experiment (tools/boundary_excluded_metric.py recomputes the
+    norms with every cell within R of a liquid-boundary node removed,
+    R = 100..1200 m).  wesel (PARTIAL): L1 = 0.211, outlet reach
+    +0.19 m.  The exclusion is FLAT -- wet L1 0.359 -> 0.361 / 0.360 /
+    0.368 at R = 300 / 600 / 1200 m, the near-chain bands sit BELOW the
+    wet average (d < 100 m: 0.333; 100-300 m: 0.301), the wet Linf cell
+    is > 1200 m from every liquid chain, and only 5.6% of the +8.8%
+    volume surplus lies within 300 m of a chain -- so TELEMAC's pinned
+    level-chain output NODES (11.82 m while interior dual cells ride
+    ~14.2 m) are real but their L1 footprint is minor, and the
+    residual is a domain-uniform positive surface bias (wet +0.31 m):
+    an effective momentum-balance difference, most plausibly the
+    unmodelled constant 2 m2/s turbulent viscosity (TELEMAC's own +1.8%
+    inflow over-delivery would push its surface the other way).  culm
+    (PARTIAL, unchanged L1 = 0.347): our inflow integral matches the
+    prescribed Q to 0.01% while the reference's own boundary-integrated
+    inflow runs at 1.89x its prescribed value at t_end and it is still
+    net filling (+18 m3/s) -- the 538k m3 storage gap belongs to the
+    reference's over-delivery, and the outlet form provably cannot
+    recover it (a symmetric-outlet variant moved the final volume only
+    +0.66%).  donau (PARTIAL): time-averaged L1 = 0.280, a uniform
+    +0.06..+0.12 m positive bias from the equivalent-K calibration; the
+    exclusion again shows the pinned level-chain nodes (309.205) are
+    minor (wet L1 0.223 flat to 0.232 at R = 1200 m, near-chain 0.219,
+    Linf cell interior), and HALF the headline norm is dry-mask: dry
+    cells (39% of the domain) score L1 = 0.369 vs wet 0.223 --
+    wetting-front positional disagreement, not surface error.
 
 ## Test suite
 

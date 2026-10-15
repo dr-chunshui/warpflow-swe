@@ -26,10 +26,14 @@
 # of the last two oscillation periods (average_window).  With the
 # level ghost repaired to the cdl_fv.f semantics (subcritical
 # correction active) the time-averaged field gives L1 = 0.280: the
-# surface sits uniformly +0.06..+0.12 m above the reference (equivalent
-# K = 40 calibration + the cell-centred vs pinned-boundary-node
-# comparison basis; TELEMAC's output nodes on the level chain are held
-# at exactly 309.205 by bord.f), not a boundary-flux error.
+# surface sits uniformly +0.06..+0.12 m above the reference
+# (equivalent K = 40 calibration).  A boundary-exclusion experiment
+# (tools/boundary_excluded_metric.py) shows the pinned level-chain
+# output nodes (held at exactly 309.205 by bord.f) are a minor L1
+# contributor -- wet L1 stays 0.223-0.232 with every cell within
+# 100-1200 m of a liquid chain removed -- and dry cells (39% of the
+# domain, L1 0.369 vs wet 0.223) carry half the headline norm through
+# wetting-front positional disagreement; not a boundary-flux error.
 case:
   name: donau
   t_end: 60000.0
