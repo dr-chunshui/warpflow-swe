@@ -26,14 +26,17 @@ def main() -> int:
             # TELEMAC reference cases: final-field L1/L2/Linf live in
             # telemac_final_field.csv (metric,value rows) instead.
             tel_csv = case_dir / "telemac_final_field.csv"
-            if not tel_csv.exists():
-                continue
-            with tel_csv.open() as fh:
-                data = {r["metric"]: float(r["value"])
-                        for r in csv.DictReader(fh)
-                        if r.get("metric") in ("l1", "l2", "linf")}
-            data["l1_h"] = data.get("l1", "")
-            data["l2_h"] = data.get("l2", "")
+            if tel_csv.exists():
+                with tel_csv.open() as fh:
+                    data = {r["metric"]: float(r["value"])
+                            for r in csv.DictReader(fh)
+                            if r.get("metric") in ("l1", "l2", "linf")}
+                data["l1_h"] = data.get("l1", "")
+                data["l2_h"] = data.get("l2", "")
+            # else: gauge / run-up / mass-acceptance cases (malpasset,
+            # gouttedo, tests_channel) have no error-metric file -- keep
+            # the row with t_end/mass only; acceptance numbers live in
+            # VALIDATION.md.
         hist = case_dir / "history.csv"
         t_end = mass_end = ""
         if hist.exists():
@@ -43,6 +46,8 @@ def main() -> int:
                 last = lines[-1]
                 t_end = last.get("t", "")
                 mass_end = last.get("mass", "")
+        if not data and not hist.exists():
+            continue  # stray dir: nothing to report
         rows.append({
             "case": case_dir.name,
             "l1_h": data.get("l1_h", ""),
