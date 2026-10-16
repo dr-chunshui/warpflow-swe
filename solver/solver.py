@@ -17,7 +17,8 @@ from . import kernels as K
 from .config import BC_TYPES, CaseConfig
 from .io_csv import MassWriter, MonitorWriter
 from .io_vtk import write_pvd, write_vtu
-from .mesh import TriMesh, classify_boundaries, cli_chains, read_cli
+from .mesh import (TriMesh, classify_boundaries, cli_chains, read_cli,
+                   read_bfr_zones, read_roughness_tbl, zone_ks_for_cells)
 from .state import bathymetry_at, build_bathymetry, build_initial, edge_bed, nearest_cell
 
 
@@ -212,7 +213,19 @@ class ShallowWaterSolver:
         # ---- source terms ------------------------------------------------
         # k_friction mode: 0 = Strickler K, 1 = Chezy C, 2 = Nikuradse ks
         # (the per-cell array carries K / C / ks respectively)
-        if cfg.chezy > 0.0:
+        if cfg.zones_file:
+            # TELEMAC roughness zones (donau): per-cell Nikuradse ks from
+            # the .bfr/.tbl pair -- the manual's own zoning, no calibration
+            zone_of_node = read_bfr_zones(cfg.zones_file, mesh.n_nodes)
+            zone_ks = read_roughness_tbl(cfg.zones_table)
+            ks, zone_of_cell = zone_ks_for_cells(mesh, zone_of_node, zone_ks)
+            self.strickler = wp.array(ks, dtype=wp.float64)
+            self._fric_mode = 2
+            uniq, cnt = np.unique(zone_of_cell, return_counts=True)
+            table = ", ".join(f"{int(z)}(ks={zone_ks[int(z)]}):{int(c)}"
+                              for z, c in zip(uniq, cnt))
+            print(f"friction zones: {table}")
+        elif cfg.chezy > 0.0:
             self.strickler = wp.array(
                 np.full(n, float(cfg.chezy), dtype=np.float64),
                 dtype=wp.float64)
@@ -230,6 +243,7 @@ class ShallowWaterSolver:
         else:
             self.strickler = None
             self._fric_mode = 0
+        self.viscosity = float(cfg.viscosity)
         self.wind_on = cfg.wind_coeff != 0.0
 
         # ---- monitors ----------------------------------------------------
@@ -301,7 +315,9 @@ class ShallowWaterSolver:
     # ------------------------------------------------------------------
     def compute_dt(self, t_remaining: float) -> float:
         wp.launch(K.k_dt, dim=self.n_cells, inputs=[
-            self.w, self.area, self.cell_edges, self.edge_len, self.dt_cell])
+            self.w, self.area, self.cell_edges, self.edge_len,
+            self.centroid, self.edge_cells, wp.float64(self.viscosity),
+            self.dt_cell])
         dt = float(self.dt_cell.numpy().min()) * self.cfg.cfl
         if dt < 1.0e-9:
             raise RuntimeError(
@@ -381,6 +397,10 @@ class ShallowWaterSolver:
         if self.cfg.coriolis != 0.0:
             wp.launch(K.k_coriolis, dim=self.n_cells, inputs=[
                 w_state, self.area, self.rhs, wp.float64(self.cfg.coriolis)])
+        if self.viscosity != 0.0:
+            wp.launch(K.k_diffusion_velocity, dim=self.n_cells, inputs=[
+                w_state, self.cell_edges, self.edge_cells, self.edge_len,
+                self.centroid, self.rhs, wp.float64(self.viscosity)])
         if dtw != 0.0:
             wp.launch(K.k_acc_f64, dim=self.n_groups, inputs=[
                 self.bflux, self._bcvol, wp.float64(dtw)])

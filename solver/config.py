@@ -27,6 +27,11 @@ Extensions (TELEMAC validation cases wave / friction / wind):
     physics:  {strickler: 70.0,               # bottom friction K [m^(1/3)/s]
                # or chezy: C [m^(1/2)/s], or nikuradse: ks [m] (log law,
                # friction_calc.f CASE 5) -- mutually exclusive
+               # or zones: {file: geo.bfr, table: roughness.tbl} -- per-cell
+               # Nikuradse ks from a TELEMAC roughness-zone file pair
+               # (mutually exclusive with the scalar friction laws)
+               viscosity: 2.0,                # eddy viscosity nu_t [m2/s]
+               # TELEMAC VELOCITY DIFFUSIVITY (0 = off)
                wind: {u: 5.0, v: 0.0, coeff: 1.2615e-3}}
     bathymetry: {type: slope, params: {z0: -4.0, slope: -1.85e-5}}
     boundary:
@@ -139,6 +144,12 @@ class CaseConfig:
     wind_v: float = 0.0
     wind_coeff: float = 0.0  # a_wind * rho_air / rho_water, 0 = off
     coriolis: float = 0.0  # Coriolis parameter f = 2*Omega*sin(lat) [1/s]
+    viscosity: float = 0.0  # constant eddy viscosity nu_t [m^2/s], 0 = off
+    # (TELEMAC VELOCITY DIFFUSIVITY, MVISUV = 2 two-point flux)
+    zones_file: str = ""  # TELEMAC .bfr roughness-zone file (node -> zone id)
+    zones_table: str = ""  # its roughness.tbl (zone id -> NIKU ks [m]);
+    # together they activate per-cell Nikuradse friction and are mutually
+    # exclusive with strickler/chezy/nikuradse
 
 
 def _require(cond: bool, msg: str) -> None:
@@ -340,6 +351,26 @@ def load_config(path: str | Path) -> CaseConfig:
              f"(strickler/chezy/nikuradse are mutually exclusive)")
     wind = dict(phys.get("wind") or {})
     coriolis = float(phys.get("coriolis", 0.0))
+    viscosity = float(phys.get("viscosity", 0.0))
+    _require(viscosity >= 0.0, f"{path}: physics.viscosity must be >= 0")
+    zones = dict(phys.get("zones") or {})
+    zones_file = zones_table = ""
+    if zones:
+        _require(set(zones) == {"file", "table"},
+                 f"{path}: physics.zones needs exactly file/table, "
+                 f"got {sorted(zones)}")
+        _require(sum(1.0 for v in (strickler, chezy, nikuradse)
+                     if v > 0.0) == 0,
+                 f"{path}: physics.zones is mutually exclusive with "
+                 f"strickler/chezy/nikuradse")
+        resolved = []
+        for key in ("file", "table"):
+            fp = Path(str(zones[key]))
+            if not fp.is_absolute():
+                fp = path.parent / fp
+            _require(fp.is_file(), f"{path}: zones {key} missing: {fp}")
+            resolved.append(str(fp))
+        zones_file, zones_table = resolved
     return CaseConfig(
         name=str(case["name"]),
         analytic=str(case.get("analytic", "")),
@@ -362,4 +393,7 @@ def load_config(path: str | Path) -> CaseConfig:
         wind_v=float(wind.get("v", 0.0)),
         wind_coeff=float(wind.get("coeff", 0.0)),
         coriolis=coriolis,
+        viscosity=viscosity,
+        zones_file=zones_file,
+        zones_table=zones_table,
     )

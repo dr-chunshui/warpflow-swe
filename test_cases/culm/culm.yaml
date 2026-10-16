@@ -16,24 +16,35 @@
 # Acceptance: final-state free surface vs f2d_culm.slf (node-wise
 # L1/L2/Linf at t = 54000 s).
 #
-# Residual diagnosis (2026-10-15): the field error L1 = 0.347 is
-# dominated by the TELEMAC reference inflowing MORE than prescribed.
-# Our ledger closes on the prescribed values exactly: integral
-# delivered 2,205,588 m3 vs prescribed integral 2,205,530 (0.01%),
-# tail rate 20.65 vs prescribed 20.615.  The reference at t = 54000
-# still delivers 38.98 m3/s = 1.89x the prescribed 20.6 (its own
-# boundary-flux integration, cli LIHBOR=4 chain) and is still net
-# filling (+18 m3/s) with 0.6 m more water over the upstream reach
-# (1.75 m vs our 1.14 m at the inlet; outlet reach differs only 5%).
-# The over-delivery is the invariant-ghost face-flux bias (same
-# mechanism we measured on wesel at +1.8%, amplified by the shallow
-# recession); TELEMAC's own DEBIMP rescale leaves it in.  We keep the
-# prescribed Q as ground truth.  A symmetric level-outlet flux was
-# tested and REVERTED: cdl_fv.f:356 evaluates the boundary flux as
-# FLUX_CHOICE(H1,HG,...) -- interior CELL state left, ghost right
-# (bord.f's node re-imposition feeds the FE arrays only, never the FV
-# flux), so the non-symmetric form here IS the TELEMAC form; the sym
-# variant moved the final volume only +0.66% anyway.
+# Residual diagnosis (rewritten 2026-10-16 after the boundary-flux
+# audit, tools/culm_ref_inflow.py): under viscosity = 0 the field
+# error at t = 54000 was L1 = 0.347.  The earlier "reference inflows
+# 1.89x its prescription" reading was a CHAIN SWAP -- 38.98 m3/s is
+# the OUTLET chain 3 (LIHBOR 5) flux; the inflow chain 1 (LIHBOR 4)
+# integrates to 20.6152 m3/s vs prescribed 20.6147 (ratio 1.00002).
+# The reference is net DRAINING (-18.36 m3/s) at t_end: a
+# slower-receding flood, not an over-injecting boundary.  Our ledger
+# closes on the prescribed values exactly (integral 2,205,588 vs
+# prescribed 2,205,530 m3, 0.01%; tail rate 20.65).  The storage gap
+# (reference 832,789 vs our 331,490 m3 at t_end, both hot-started from
+# ini_culm ~809,693 m3; upstream reach 1.75 m vs our 1.14 m, outlet
+# reach differs only 5%) is a DRAINAGE-RATE difference: the reference
+# spreads momentum with VELOCITY DIFFUSIVITY = 2 m2/s
+# (t2d_culm.cas:53-54), which damps the recession and holds water on
+# the floodplain -- modelled here as physics.viscosity.  Measured
+# (2026-10-16, the nu = 2 arm): the direction is confirmed -- L1
+# 0.347 -> 0.3164, final mass 331,490 -> 351,150 m3 toward 832,789,
+# wet bias -0.3245 m -- but only ~4% of the storage gap closes, well
+# short of the L1 <= 0.15 / storage +-10% closure threshold, so the
+# DOMINANT residual is the discretization regime (nodal P1 FE with
+# implicit 27000 x 2 s steps vs cell-centred FV with explicit ~0.02 s
+# steps, edge-based storage), recorded as a known deviation.  A
+# symmetric level-outlet flux was tested and REVERTED: cdl_fv.f:356
+# evaluates the boundary flux as FLUX_CHOICE(H1,HG,...) -- interior
+# CELL state left, ghost right (bord.f's node re-imposition feeds the
+# FE arrays only, never the FV flux), so the non-symmetric form here
+# IS the TELEMAC form; the sym variant moved the final volume only
+# +0.66% anyway.
 case:
   name: culm
   t_end: 54000.0
@@ -45,6 +56,9 @@ mesh:
 physics:
   g: 9.81
   strickler: 30.0
+  # t2d_culm.cas:53-54: TURBULENCE MODEL 1 (constant viscosity),
+  # VELOCITY DIFFUSIVITY 2. m2/s (MVISUV = 2 two-point flux mirror)
+  viscosity: 2.0
 
 initial:
   type: selafin_state

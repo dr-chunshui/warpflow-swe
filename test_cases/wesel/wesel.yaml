@@ -14,9 +14,11 @@
 # form K = 21.1/ks^(1/6) = 36.9 is ~19% too rough and ponded the steady
 # profile +0.46 m) gave L1 = 0.124; the true depth-dependent log law
 # replaces it.  TELEMAC runs 360 steps x 120 s to t = 43200 s
-# for steady state; the constant 2 m2/s turbulent viscosity of the
-# reference is not modelled.  The FV reference f2d_wesel.slf stores
-# only the final steady state.
+# for steady state.  The constant 2 m2/s turbulent viscosity of the
+# reference (t2d_wesel.cas:107-108, TURBULENCE MODEL 1 + VELOCITY
+# DIFFUSIVITY 2., manual p. 316) is modelled here as physics.viscosity
+# (MVISUV = 2 two-point flux mirror, diffusion_fv.f).  The FV
+# reference f2d_wesel.slf stores only the final steady state.
 #
 # Acceptance: free surface vs f2d_wesel.slf (node-wise L1/L2/Linf).
 #
@@ -32,13 +34,22 @@
 # average and the Linf cell in the interior, so TELEMAC's pinned
 # level-chain output nodes (11.82 m against interior dual cells
 # ~14.2 m) are real but a minor L1 contributor; (b) the dominant
-# residual is a domain-uniform wet bias of +0.31 m -- the reference's
-# constant 2 m2/s turbulent viscosity is not modelled (its own +1.8%
-# inflow over-delivery would push its surface the other way).
-# The inflow delivers exactly Q = 1061 (integral control; TELEMAC
-# itself over-delivers +1.8%).  Friction sensitivity: uniform
-# K = 44 under the same boundary treatment gave L1 = 0.129, but LAW 5
-# Nikuradse ks = 0.035 is what the manual prescribes and is kept.
+# residual is a domain-uniform wet bias, NOT a missing-viscosity
+# artifact: the nu ladder (2026-10-16, boundary-excluded metric on the
+# final field) is monotonic the WRONG way -- nu = 0/0.2/1/2 gives
+# L1 = 0.211/0.2134/0.2183/0.2267 and wet bias
+# +0.31/+0.316/+0.325/+0.341 m (dbias/dnu ~ +0.015 m per m2/s; wet
+# volume +8.8% -> +1.06e6 m3 at nu = 2).  Adding the reference's own
+# 2 m2/s piles water onto our already-high side, so the reference's
+# LOWER surface is a discretization-regime effect (nodal P1 FE with
+# implicit 360 x 120 s steps vs cell-centred FV with explicit 0.05 s),
+# not a viscosity deficit; nu = 2 is kept anyway (physics fidelity --
+# it is what t2d_wesel.cas runs).  The reference's own +1.8% inflow
+# over-delivery (DEBIMP rescale) would push its surface the other way
+# too.  The inflow here delivers exactly Q = 1061 (integral control).
+# Friction sensitivity: uniform K = 44 under the same boundary
+# treatment gave L1 = 0.129, but LAW 5 Nikuradse ks = 0.035 is what
+# the manual prescribes and is kept.
 case:
   name: wesel
   t_end: 43200.0
@@ -50,6 +61,9 @@ mesh:
 physics:
   g: 9.81
   nikuradse: 0.035
+  # t2d_wesel.cas:107-108: TURBULENCE MODEL 1 (constant viscosity),
+  # VELOCITY DIFFUSIVITY 2. m2/s (manual p. 316)
+  viscosity: 2.0
 
 initial:
   type: level_profile

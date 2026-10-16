@@ -14,7 +14,9 @@ Numerics mirror TELEMAC-2D v8p4 finite volume sources:
 - Boundary ghost states: cdl_fv.f   (wall strong imposition, Riemann
   invariant ghost for level/discharge; bord.f elevation->depth conversion)
 - Sources:               k_wind (wind stress, TELEMAC option for wind = 2),
-  k_friction (Strickler law, semi-implicit operator splitting)
+  k_friction (Strickler law, semi-implicit operator splitting),
+  k_diffusion_velocity (eddy-viscosity diffusion, MVISUV = 2 two-point
+  flux; diff_dt.f timestep bound folded into k_dt)
 
 float64 discipline: every literal inside kernels is wp.float64(...);
 gravity is the module constant G from numeric.py.
@@ -804,6 +806,64 @@ def k_coriolis(
 
 
 # ---------------------------------------------------------------------------
+# Eddy-viscosity diffusion of velocity (TELEMAC FV two-point flux option,
+# diffusion_fv.f / diffusion_flux_fv.f with MVISUV = 2; the reference cases
+# wesel/culm run VELOCITY DIFFUSIVITY = 2 m2/s).  Face flux
+#     Phi_e = nu * (h_a + h_b)/2 * (L_e/d_e) * (u_b - u_a)
+# with d_e the centre-to-centre distance; the (h_a+h_b)/2 weighting keeps
+# the operator symmetric, so the per-cell accumulation visits every interior
+# edge twice with the SAME coefficient and the momentum rows sum to zero
+# (exact linear-momentum conservation).  Mirror choices:
+# - DRYNEU: an edge with either side dry carries no diffusive flux;
+# - boundary edges carry none either (Neumann zero-gradient); TELEMAC adds
+#   a weak Dirichlet penalty (RELAX = 0.25) at imposed-velocity inflows
+#   with negative FLBOR -- dropped here because the inflow groups already
+#   deliver the prescribed discharge exactly (integral control).
+# rhs carries the conservative momentum rate d(hu)/dt * area as usual
+# (mass row strictly zero; dry cells skipped).
+# ---------------------------------------------------------------------------
+@wp.kernel
+def k_diffusion_velocity(
+    w: wp.array(dtype=wp.vec3d),
+    cell_edges: wp.array(dtype=wp.vec3i),
+    edge_cells: wp.array(dtype=wp.vec2i),
+    edge_len: wp.array(dtype=wp.float64),
+    centroids: wp.array(dtype=wp.vec2d),
+    rhs: wp.array(dtype=wp.vec3d),
+    nu: wp.float64,
+):
+    a = wp.tid()
+    ha = w[a][0]
+    if ha <= EPS_F64:
+        return
+    ua = w[a][1] / ha
+    va = w[a][2] / ha
+    ce = cell_edges[a]
+    for k in range(3):
+        e = ce[k]
+        # edge_cells is directed [A, B] (normal A -> B): the neighbour of
+        # the current cell is the OTHER side, not blindly [1]
+        a0 = edge_cells[e][0]
+        b1 = edge_cells[e][1]
+        if a0 == a:
+            b = b1
+        else:
+            b = a0
+        if b >= 0:
+            hb = w[b][0]
+            if hb > EPS_F64:
+                dx = centroids[b][0] - centroids[a][0]
+                dy = centroids[b][1] - centroids[a][1]
+                dist = wp.sqrt(dx * dx + dy * dy)
+                if dist > EPS_F64:  # degenerate slivers (d ~ 0) carry no flux
+                    c = nu * edge_len[e] * wp.float64(0.5) * (ha + hb) / dist
+                    rhs[a] = rhs[a] + wp.vec3d(
+                        wp.float64(0.0),
+                        c * (w[b][1] / hb - ua),
+                        c * (w[b][2] / hb - va))
+
+
+# ---------------------------------------------------------------------------
 # Accumulate the per-group boundary volume rate into a running total:
 # bcvol[g] += rate[g] * weight.  k_flux resets bflux each call and stacks
 # the OUTFLOWING mass rate (le * f0, outward normal), so the exact update
@@ -909,6 +969,11 @@ def k_zero_f64(dst: wp.array(dtype=wp.float64)):
 # ---------------------------------------------------------------------------
 # Per-cell CFL timestep (caldt.f): dt_c = DTHAUT / max(0.01, c + |u|),
 # DTHAUT = area / sum(edge lengths).  Host takes min * CFL.
+# With nu > 0 the explicit diffusion operator adds the Gershgorin bound
+#     dt_c <= 0.5 * area / sum_wet(nu * L_e / d_e)
+# (TELEMAC diff_dt.f does the same inside caldt; factor 0.5 is one extra
+# safety over its FWTD = 1).  Dry cells are not clamped, matching the
+# advection term; nu = 0 reproduces the old kernel bit-for-bit.
 # ---------------------------------------------------------------------------
 @wp.kernel
 def k_dt(
@@ -916,6 +981,9 @@ def k_dt(
     cell_area: wp.array(dtype=wp.float64),
     cell_edges: wp.array(dtype=wp.vec3i),
     edge_len: wp.array(dtype=wp.float64),
+    centroids: wp.array(dtype=wp.vec2d),
+    edge_cells: wp.array(dtype=wp.vec2i),
+    nu: wp.float64,
     dt_out: wp.array(dtype=wp.float64),
 ):
     c = wp.tid()
@@ -924,7 +992,28 @@ def k_dt(
     circum = edge_len[ce[0]] + edge_len[ce[1]] + edge_len[ce[2]]
     dthaut = cell_area[c] / circum
     speed = wp.sqrt(u * u + v * v) + wp.sqrt(G * h)
-    dt_out[c] = dthaut / wp.max(wp.float64(0.01), speed)
+    d = dthaut / wp.max(wp.float64(0.01), speed)
+    if nu > EPS_F64:
+        if h > EPS_F64:
+            acc = wp.float64(0.0)
+            for k in range(3):
+                e = ce[k]
+                a0 = edge_cells[e][0]
+                b1 = edge_cells[e][1]
+                if a0 == c:
+                    b = b1
+                else:
+                    b = a0
+                if b >= 0:
+                    if w[b][0] > EPS_F64:
+                        dx = centroids[b][0] - centroids[c][0]
+                        dy = centroids[b][1] - centroids[c][1]
+                        dist = wp.sqrt(dx * dx + dy * dy)
+                        if dist > EPS_F64:
+                            acc = acc + nu * edge_len[e] / dist
+            if acc > EPS_F64:
+                d = wp.min(d, wp.float64(0.5) * cell_area[c] / acc)
+    dt_out[c] = d
 
 
 # ---------------------------------------------------------------------------

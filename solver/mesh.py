@@ -383,6 +383,114 @@ def cli_chains(mesh: TriMesh, cli: dict) -> tuple[np.ndarray, list]:
 
 
 # ---------------------------------------------------------------------------
+# TELEMAC roughness zones: geo.bfr ("node_number zone_id" per row, 1-based,
+# one row per mesh node) + roughness.tbl ("zone_id LAW value [NULL]" rows,
+# '*' comments, END terminator).  Only the NIKURADSE law is supported
+# (k_friction mode 2 carries ks); the zone-id digits carry no meaning
+# (donau: 99999010 -> 10.0 m), the mapping must come from the table.
+# ---------------------------------------------------------------------------
+
+
+def read_bfr_zones(path: str, n_nodes: int) -> np.ndarray:
+    """Parse a TELEMAC .bfr zone file -> zone id per node (0-based array).
+
+    Every mesh node must be covered exactly by the "node zone" rows.
+    """
+    zone = np.full(n_nodes, -1, dtype=np.int64)
+    nline = 0
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            nline += 1
+            s = line.strip()
+            if not s or s.startswith(("*", "/", "#")):
+                continue
+            parts = s.split()
+            if len(parts) < 2:
+                raise ValueError(f"{path}: line {nline}: expected "
+                                 f"'node zone', got {s!r}")
+            try:
+                node = int(parts[0]) - 1
+                zid = int(parts[1])
+            except ValueError:
+                raise ValueError(f"{path}: line {nline}: malformed: {s!r}")
+            if not 0 <= node < n_nodes:
+                raise ValueError(f"{path}: line {nline}: node {node + 1} "
+                                 f"outside the mesh (1..{n_nodes})")
+            if zone[node] != -1:
+                raise ValueError(f"{path}: line {nline}: node {node + 1} "
+                                 f"listed twice")
+            zone[node] = zid
+    missing = int(np.count_nonzero(zone == -1))
+    if missing:
+        raise ValueError(f"{path}: {missing} of {n_nodes} node(s) not "
+                         f"covered by the zone file")
+    return zone
+
+
+def read_roughness_tbl(path: str) -> dict:
+    """Parse a TELEMAC roughness table -> {zone_id: ks} (NIKURADSE rows)."""
+    out: dict = {}
+    nline = 0
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            nline += 1
+            s = line.strip()
+            if not s or s.startswith("*"):
+                continue
+            if s.upper().startswith("END"):
+                break
+            parts = s.split()
+            if len(parts) < 3:
+                raise ValueError(f"{path}: line {nline}: expected "
+                                 f"'zone law value', got {s!r}")
+            try:
+                zid = int(parts[0])
+            except ValueError:
+                continue  # legend / comment row without '*' (donau header)
+            if parts[1].upper() != "NIKU":
+                raise ValueError(f"{path}: line {nline}: only the Nikuradse "
+                                 f"law (NIKU) is supported, got {parts[1]!r}")
+            try:
+                out[zid] = float(parts[2])
+            except ValueError:
+                raise ValueError(f"{path}: line {nline}: malformed: {s!r}")
+    if not out:
+        raise ValueError(f"{path}: no NIKU roughness entries found")
+    return out
+
+
+def zone_ks_for_cells(mesh: TriMesh, zone_of_node: np.ndarray,
+                      zone_ks: dict) -> tuple[np.ndarray, np.ndarray]:
+    """Per-cell Nikuradse ks from node zones.
+
+    Majority vote of the three corner zones; a tie (3 distinct zones) is
+    resolved by the node nearest the cell centroid (deterministic; donau:
+    57 of 93209 cells).  Returns ``(ks (n_cells,) float64,
+    zone_of_cell (n_cells,) int64)``.
+    """
+    tri_zones = zone_of_node[mesh.tris]  # (n, 3)
+    n_cells = len(tri_zones)
+    zone_of_cell = np.empty(n_cells, dtype=np.int64)
+    for c in range(n_cells):
+        z = tri_zones[c]
+        vals, counts = np.unique(z, return_counts=True)
+        if len(vals) == 1 or counts.max() >= 2:
+            zone_of_cell[c] = vals[np.argmax(counts)]
+        else:
+            nds = mesh.tris[c]
+            cen = mesh.cell_centroids[c]
+            k = np.argmin(((mesh.nodes[nds] - cen) ** 2).sum(axis=1))
+            zone_of_cell[c] = z[k]
+    unknown = sorted(set(zone_of_cell.tolist()) - set(zone_ks))
+    if unknown:
+        raise ValueError(
+            f"zone(s) {unknown} present in the mesh but missing from the "
+            f"roughness table {sorted(zone_ks)}")
+    ks = np.array([zone_ks[int(z)] for z in zone_of_cell], dtype=np.float64)
+    return ks, zone_of_cell
+
+
+# ---------------------------------------------------------------------------
 # SELAFIN (.slf) reader — enough of the format to load TELEMAC geometry files.
 # All records are big-endian, wrapped in 4-byte length markers.
 # ---------------------------------------------------------------------------

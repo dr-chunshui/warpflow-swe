@@ -8,10 +8,27 @@
 # re-balanced to steady state under Q = 218 m3/s at chain 4 (upstream,
 # LIHBOR 4 + PRESCRIBED FLOWRATES) and level 309.205 m at chain 2
 # (downstream, PRESCRIBED ELEVATIONS).  The 7 Nikuradse friction
-# domains (ks 0.025 m main channel .. 10 m pier zones,
-# roughness.tbl) are approximated by one calibrated equivalent Strickler
-# K = 40 m^(1/3)/s (calibrated on the water-surface slope; Griffith gives 39 for the main channel,
-# 28.6 groyne fields, 21-14 pier/structure zones).
+# domains of the manual (ks 0.025 m main channel .. 10 m pier/structure
+# zones, roughness.tbl + geo_donau.bfr) are modelled natively:
+# physics.zones assigns each cell its zone by corner-node majority vote
+# (tie -> nearest-centroid node) and feeds k_friction mode 2, the
+# per-cell Nikuradse log law.  Known deviations from t2d_donau.cas:
+# TURBULENCE MODEL 2 (Elder) is not modelled (viscosity = 0 here), and
+# lateral wall friction (LAW OF FRICTION ON LATERAL BOUNDARIES 5,
+# ks = 0.01 m, 5.0 m at the bridge 2 pier 3) is not modelled.
+# Sensitivity data point (2026-10-15): one calibrated uniform
+# Strickler K = 40 m^(1/3)/s gave L1 = 0.280 with the surface sitting
+# uniformly +0.06..+0.12 m above the reference.  Zones result
+# (2026-10-16): the native 7-zone law gives L1 = 0.3102 (wet bias
+# +0.190 m, dry cells 0.369 -- wetting-front positional disagreement
+# still carries ~45% of the headline through the 39% dry area;
+# boundary-excluded wet L1 flat 0.273-0.286, pinned nodes minor).  The
+# uniform K = 40 calibration was implicitly absorbing the zonal
+# roughness AND the two unmodelled momentum terms: with native zones
+# the floodplain (ks 0.1..10 m, ~18k cells) is far rougher at shallow
+# depth than K = 40 and the wet bias grows to +0.19 m.  The zones arm
+# is kept (it is what the cas prescribes); K = 40 is the calibration
+# sensitivity data point.
 #
 # Acceptance: free surface vs f2d_donau.slf (node-wise L1/L2/Linf).
 #
@@ -44,7 +61,12 @@ mesh:
 
 physics:
   g: 9.81
-  strickler: 40.0
+  # the manual's 7 Nikuradse zones: ks 0.025 (main channel) .. 10.0 m
+  # (pier/structure zones); uniform calibrated K = 40 was the
+  # 2026-10-15 sensitivity data point (L1 = 0.280)
+  zones:
+    file: geo_donau.bfr
+    table: roughness.tbl
 
 initial:
   type: selafin_state

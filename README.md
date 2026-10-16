@@ -77,9 +77,9 @@ analytic solution is configured, `compare.png` + `errors.csv`.
 | Monai-Valley tsunami (ch. 33) | 1 | final-field L1 4.1e-4 m (wave amplitude 0.016 m) |
 | Swash solution (ch. 47) | 1 | final-field L1 1.5e-3 m at the drained end state |
 | Digue breakwater overflow (ch. 21) | 1 | final-field L1 7.4e-2 m (time-mean; mass residual ~1e-8 m3) |
-| Culm flood recession (ch. 18) | 1 | final-field L1 0.347 m (PARTIAL: downstream backwater matches to -0.09 m; upper reach drains ~3x faster, note 24) |
-| Donau bridge reach (ch. 22) | 1 | final-field L1 0.287 m (PARTIAL: uniform +0.12..+0.25 m ponding at the cell-centred level boundary, notes 20/24) |
-| Wesel Rhine steady flow (ch. 58) | 1 | final-field L1 0.124 m (PARTIAL: constant log-law-equivalent K = 44; main channel +0.18 m ponding, volume +2.5%, note 18) |
+| Culm flood recession (ch. 18) | 1 | final-field L1 0.3164 m (nu = 2 m2/s; inflow equals the prescription to 0.003%, notes 24/25) |
+| Donau bridge reach (ch. 22) | 1 | final-field L1 0.3102 m (native 7-zone Nikuradse; calibrated K = 40 arm scored 0.280, notes 20/25) |
+| Wesel Rhine steady flow (ch. 58) | 1 | final-field L1 0.2267 m (nu = 2 m2/s; nu ladder 0/0.2/1/2 -> 0.211/0.2134/0.2183/0.2267, note 25) |
 
 Closed-domain mass is conserved to machine precision (~1e-15 relative).
 
